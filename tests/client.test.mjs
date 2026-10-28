@@ -395,11 +395,12 @@ test('点选项只改草稿；保存成功提示「已保存，立即生效」',
       'continueText',
       'failover',
       'fallbacks',
+      'scanOnBoot',
       'continueOnMaxTokens',
       'idleWatchdog',
       'idleTimeoutSec',
     ],
-    '保存一次写全部 10 个字段',
+    '保存一次写全部 11 个字段',
   )
   assert.equal(ops[0].value, 'long')
   assert.equal(ops[1].value, true)
@@ -409,15 +410,16 @@ test('点选项只改草稿；保存成功提示「已保存，立即生效」',
   assert.equal(ops[5].value, false)
   assert.equal(ops[6].value, '')
   assert.equal(ops[7].value, true)
-  assert.equal(ops[8].value, false)
-  assert.equal(ops[9].value, 180)
+  assert.equal(ops[8].value, true)
+  assert.equal(ops[9].value, false)
+  assert.equal(ops[10].value, 180)
   assert.equal(scope.mutateCalls[0].revision, 7, '带上当前快照的 revision')
   assert.ok(textOf(next).includes('已保存，立即生效'))
   assert.equal(saveButton(next).props.disabled, true, '保存成功后按钮回到禁用')
   renderer.unmount()
 })
 
-test('自动继续控件：保存 10 个字段并 clamp 数字', async () => {
+test('自动继续控件：保存 11 个字段并 clamp 数字', async () => {
   const scope = makeScope(READY('normal', 3))
   const { renderer, tree } = setup(scope)
 

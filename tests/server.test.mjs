@@ -754,7 +754,7 @@ await test('failover：失败后按顺序切备用模型，成功后重置', asy
     },
   }
   const { agent, emit } = await setupAutoContinue(
-    { failover: true, fallbacks: 'p2/m2,p3/m3' },
+    { failover: true, fallbacks: 'p2/m2,p3/m3', healthCooldownSec: 0 },
     undefined,
     services,
   )
@@ -785,6 +785,79 @@ await test('failover：开关关闭时不切模型', async () => {
   await sleep(20)
   assert.equal(selections.length, 0)
   assert.equal(agent.followups.length, 1, '不换模型也要继续')
+})
+
+await test('冷会话扫描：启动后恢复最近失败会话', async () => {
+  const agent = makeFakeAgent('cold-1')
+  let resolved = false
+  const agents = {
+    get(id) {
+      return id === 'cold-1' && resolved ? agent : undefined
+    },
+    list() {
+      return []
+    },
+  }
+  const services = {
+    sessionController: {
+      async list() {
+        return { items: [{ sessionId: 'cold-1', updatedAt: Date.now() }] }
+      },
+      async inspect() {
+        return {
+          events: [
+            { type: 'turn/start' },
+            { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+          ],
+        }
+      },
+      async resolveAgent() {
+        resolved = true
+        return { agent }
+      },
+    },
+  }
+  const { settings } = makeFakeSettings(llmRow({ mock: { retryPolicy: { mode: 'normal', maxRetries: 0 } } }))
+  const { ctx, calls } = makeFakeCtx({ settings, agents, services })
+  process.env.DSH_AUTO_RETRY_BOOT_DELAY_MS = '5'
+  try {
+    await apply(ctx, {
+      patience: 'normal',
+      autoContinue: true,
+      continueDelaySec: 0,
+      maxConsecutive: 5,
+      scanOnBoot: true,
+    })
+    await sleep(80)
+  } finally {
+    delete process.env.DSH_AUTO_RETRY_BOOT_DELAY_MS
+  }
+  assert.equal(agent.followups.length, 1, '冷会话应被唤醒并补一条继续')
+  assert.ok(calls.infos.some((line) => line.includes('boot scan recovered')))
+})
+
+await test('路由健康：失败过的备用在冷却期内跳过', async () => {
+  const selections = []
+  const services = {
+    sessionController: { agents: { selectForNextRequest(agent, selected) { selections.push(selected) } } },
+  }
+  const { agent, emit } = await setupAutoContinue(
+    { failover: true, fallbacks: 'p2/m2,p3/m3', healthCooldownSec: 300, maxConsecutive: 5 },
+    undefined,
+    services,
+  )
+  const errorTurn = { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } }
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.deepEqual(selections, [
+    { provider: 'p2', model: 'm2' },
+    { provider: 'p3', model: 'm3' },
+  ], 'p2 失败后冷却，第三次没有健康候选可切')
+  assert.equal(agent.followups.length, 3, '没有候选时仍继续')
 })
 
 if (failures.length > 0) {
