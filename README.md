@@ -37,7 +37,9 @@ DSH 自带的 `dsh-llm-retry` 默认只重试 **5 次、总共约 16 秒**（500
 
 ### 1. 请求级重试（沿用 DSH 自带引擎）
 
-把「耐心」写进每个 provider 的 `retryPolicy`，并显式补上容易漏掉的错误码：
+把「耐心」写进每个 provider 的 `retryPolicy`，并显式补上容易漏掉的错误码。
+覆盖两个写入点：`llm-pi-ai` 的每个 provider，以及 DeepSeek 官方 `llm-deepseek`
+命名空间的顶层 `retryPolicy`。
 
 ```text
 retryableCodes: EMPTY_RESPONSE, RATE_LIMIT, QUOTA, SERVER,
@@ -150,9 +152,9 @@ dsh plugin --profile desktop add github:Amer-CN/dsh-retry-panel
 ## 它是怎么工作的
 
 - **重试策略**：面板保存时先写本插件配置，再 `POST /api/auto-retry/apply`；
-  Host 在独立 HTTP 任务里调用 `settings.mutate('llm-pi-ai', ops)`，给所有
-  provider 写入 `retryPolicy`。走独立路由是因为在 `settings/document-updated`
-  里再写另一个条目会撞 `HMR transactions cannot be nested`。
+  Host 在独立 HTTP 任务里调用 `settings.mutate`，给 `llm-pi-ai` 的 provider
+  和 `llm-deepseek` 顶层写入 `retryPolicy`。走独立路由是因为在
+  `settings/document-updated` 里再写另一个条目会撞 `HMR transactions cannot be nested`。
 - **自动继续**：监听 `session/event` 的 `turn/end`：
   - `error` 且非永久 → 排定继续
   - `max-tokens` → 跨轮兜底（同轮阶段优先）
@@ -215,7 +217,7 @@ npm test
   `/api/auto-retry/apply` 路由、自动继续 / 同轮续写 / 压缩恢复 / 看门狗状态机
 - `lib/client.js`：浏览器侧。lazy-CJS 模块壳，注册 `settings.section`，渲染设置卡片
 - `cordis.patch.yml`：bundle patch，只插入 `auto-retry` 一行
-- `tests/`：不启动 DSH 的离线测试（服务端 27 项、客户端 10 项）
+- `tests/`：不启动 DSH 的离线测试（服务端 29 项、客户端 10 项）
 
 没有构建步骤；`lib/*.js` 就是发布产物。
 

@@ -674,6 +674,29 @@ await test('in-turn：max-tokens 时同轮 steer 续写，单轮上限 3 次', a
   assert.equal(agent.steers.length, 3)
 })
 
+await test('apply：首次安装同时补 llm-deepseek.retryPolicy', async () => {
+  const rows = [...llmRow({ mock: {} }), { ns: 'llm-deepseek', revision: 4, value: {} }]
+  const { settings, calls } = makeFakeSettings(rows)
+  const { ctx } = makeFakeCtx({ settings })
+  await apply(ctx, { patience: 'long' })
+  assert.equal(calls.mutate.length, 2, 'pi-ai 与 deepseek 各写一次')
+  const deepseek = calls.mutate.find((call) => call.ns === 'llm-deepseek')
+  assert.ok(deepseek, '必须覆盖 DeepSeek 官方 provider')
+  assert.deepEqual(deepseek.ops, [{ op: 'set', path: ['retryPolicy'], value: PRESETS.long }])
+})
+
+await test('apply：llm-deepseek 已有 retryPolicy 时不覆盖', async () => {
+  const rows = [
+    ...llmRow({ mock: {} }),
+    { ns: 'llm-deepseek', revision: 4, value: { retryPolicy: { mode: 'always' } } },
+  ]
+  const { settings, calls } = makeFakeSettings(rows)
+  const { ctx } = makeFakeCtx({ settings })
+  await apply(ctx, { patience: 'normal' })
+  assert.equal(calls.mutate.length, 1, '只补 pi-ai，不碰手工配置的 deepseek')
+  assert.equal(calls.mutate[0].ns, 'llm-pi-ai')
+})
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failed, ${passed} passed`)
   for (const { label } of failures) console.error(`  FAILED: ${label}`)
