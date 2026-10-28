@@ -1,7 +1,7 @@
 {
   "name": "dsh-auto-retry",
-  "version": "0.2.0",
-  "description": "DeepSeek Harness (DSH) 插件：断线重试 + 回合失败自动继续 + 卡住检测，设置里一张卡片搞定",
+  "version": "0.3.0",
+  "description": "DeepSeek Harness (DSH) 插件：断线重试 + 自动继续 + 同轮截断续写 + 压缩吞轮恢复 + 卡住检测",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -24,7 +24,9 @@
     "429",
     "rate-limit",
     "auto-continue",
-    "watchdog"
+    "watchdog",
+    "max-tokens",
+    "compaction"
   ],
   "license": "MIT",
   "author": "Amer-CN",

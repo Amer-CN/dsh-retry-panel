@@ -23,12 +23,16 @@ import {
   Config,
   PRESETS,
   apply,
+  applyToolGuard,
   buildContinueMessage,
   buildOps,
   clampInt,
   contentToText,
+  continueDelayMs,
   decideTurnAction,
+  fillContinueText,
   inject,
+  isPermanentFailure,
   name,
   normalizePatience,
   readPatience,
@@ -191,6 +195,12 @@ await test('PRESETS：四档齐全，字段与等待时长语义正确', () => {
   assert.equal(PRESETS.long.maxRetries, 40)
   assert.equal(PRESETS.always.mode, 'always')
   assert.equal(PRESETS.always.maxRetries, undefined, 'always 不设次数上限')
+  for (const id of ['off', 'normal', 'long']) {
+    assert.ok(PRESETS[id].retryableCodes.includes('QUOTA'), `${id} 必须重试 QUOTA（网关会把瞬时 429 误归类）`)
+    assert.ok(PRESETS[id].retryableCodes.includes('PI_AI_ERROR'), `${id} 必须重试 PI_AI_ERROR`)
+    assert.ok(PRESETS[id].retryableCodes.includes('RATE_LIMIT'))
+    assert.ok(PRESETS[id].retryableCodes.includes('UNKNOWN'))
+  }
 })
 
 await test('buildOps：每个 provider 一条 set，路径正确且值为深拷贝', () => {
@@ -428,12 +438,48 @@ await test('decideTurnAction：成功重置 / 失败继续 / 用户停止不继�
   assert.equal(decideTurnAction({ kind: 'completed' }, base), 'reset')
   assert.equal(decideTurnAction({ kind: 'error', error: { code: 'RATE_LIMIT' } }, base), 'continue')
   assert.equal(decideTurnAction({ kind: 'error' }, { ...base, autoContinue: false }), 'none')
+  assert.equal(decideTurnAction({ kind: 'error', error: { code: 'AUTH' } }, base), 'skip')
+  assert.equal(decideTurnAction({ kind: 'error', error: { code: 'QUOTA' } }, base), 'skip')
+  assert.equal(decideTurnAction({ kind: 'error', error: { code: 'CONTEXT_WINDOW_EXCEEDED' } }, base), 'skip')
+  assert.equal(decideTurnAction({ kind: 'error', error: { code: 'INVALID_REQUEST' } }, base), 'skip')
+  assert.equal(decideTurnAction({ kind: 'error', error: { code: 'SERVER' } }, base), 'continue')
   assert.equal(decideTurnAction({ kind: 'max-tokens' }, base), 'continue')
   assert.equal(decideTurnAction({ kind: 'max-tokens' }, { ...base, continueOnMaxTokens: false }), 'none')
   assert.equal(decideTurnAction({ kind: 'aborted', reason: { kind: 'user' } }, base), 'none')
   assert.equal(decideTurnAction({ kind: 'aborted', reason: { kind: 'hook' } }, { ...base, idleWatchdog: true }), 'continue')
   assert.equal(decideTurnAction({ kind: 'aborted', reason: { kind: 'hook' } }, { ...base, idleWatchdog: false }), 'none')
   assert.equal(decideTurnAction({ kind: 'interrupted' }, base), 'none')
+})
+
+await test('isPermanentFailure：认证/额度/上下文/模型不存在为永久，网络类为临时', () => {
+  assert.equal(isPermanentFailure({ code: 'AUTH' }), true)
+  assert.equal(isPermanentFailure({ code: 'QUOTA' }), true)
+  assert.equal(isPermanentFailure({ code: 'UNKNOWN_MODEL' }), true)
+  assert.equal(isPermanentFailure({ code: 'X', message: 'invalid api key' }), true)
+  assert.equal(isPermanentFailure({ code: 'X', message: 'maximum context length exceeded' }), true)
+  assert.equal(isPermanentFailure({ code: 'RATE_LIMIT', message: '429 capacity' }), false)
+  assert.equal(isPermanentFailure({ code: 'SERVER', message: '502 bad gateway' }), false)
+  assert.equal(isPermanentFailure({ code: 'X', message: 'socket hang up' }), false)
+})
+
+await test('continueDelayMs：连续失败按 2 倍增长，封顶 10 分钟', () => {
+  const settings = { continueDelaySec: 5 }
+  assert.equal(continueDelayMs(settings, 0), 5000)
+  assert.equal(continueDelayMs(settings, 1), 10000)
+  assert.equal(continueDelayMs(settings, 3), 40000)
+  assert.equal(continueDelayMs(settings, 20), 600000)
+  assert.equal(continueDelayMs({ continueDelaySec: 0 }, 5), 0)
+})
+
+await test('fillContinueText / applyToolGuard：模板占位符与幂等护栏', () => {
+  assert.equal(fillContinueText('继续', { code: '429' }), '继续')
+  assert.equal(fillContinueText('继续（{code}，第 {attempt} 次）', { code: '429', attempt: 2 }), '继续（429，第 2 次）')
+  assert.equal(fillContinueText('', { code: '429' }), '继续')
+  const guarded = applyToolGuard('继续', { name: 'git_push', result: false })
+  assert.ok(guarded.includes('git_push'))
+  assert.ok(guarded.includes('可能没有完成'))
+  assert.equal(applyToolGuard('继续', { name: 'git_push', result: true }), '继续')
+  assert.equal(applyToolGuard('继续', undefined), '继续')
 })
 
 await test('buildContinueMessage：user 角色 + text part + user source', () => {
@@ -456,8 +502,13 @@ function makeFakeAgent(id = 'session-1') {
     session: { header: { origin: 'main' } },
     followups: [],
     cancels: [],
+    steers: [],
     followup(message) {
       this.followups.push(message)
+    },
+    steer(message) {
+      this.steers.push(message)
+      return true
     },
     cancel(cause, options) {
       this.cancels.push({ cause, options })
@@ -548,6 +599,81 @@ await test('auto-continue：人工消息取消待发；自身「继续」回显�
   assert.equal(agent.followups.length, 0, '人工消息后取消待发')
 })
 
+await test('auto-continue：AUTH 等永久失败不自动继续', async () => {
+  const { agent, emit } = await setupAutoContinue()
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'AUTH' } } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 0, '认证失败重试无意义，必须人工处理')
+})
+
+await test('auto-continue：最后工具无结果时附加幂等护栏；有结果则不附加', async () => {
+  const { agent, emit } = await setupAutoContinue()
+
+  emit({ id: agent.id }, { type: 'tool/call', data: { name: 'git_push', callId: 'c1' } })
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
+  await sleep(20)
+  const guarded = agent.followups[0].content[0].text
+  assert.ok(guarded.includes('git_push'), '护栏要点名工具')
+  assert.ok(guarded.includes('可能没有完成'), '没结果时要提醒先核验')
+
+  emit({ id: agent.id }, { type: 'turn/start' })
+  emit({ id: agent.id }, { type: 'tool/call', data: { name: 'read_file', callId: 'c2' } })
+  emit(
+    { id: agent.id },
+    { type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 'c2' }] } } },
+  )
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
+  await sleep(20)
+  assert.equal(agent.followups[1].content[0].text, '继续', '有结果时不附加护栏')
+})
+
+await test('压缩吞轮：检查点后零产出 completed 自动补续写；有 assistant 输出不补', async () => {
+  const { agent, emit } = await setupAutoContinue()
+
+  emit({ id: agent.id }, { type: 'turn/start' })
+  emit(
+    { id: agent.id },
+    { type: 'user/message', data: { source: { kind: 'compact-checkpoint' }, content: [] } },
+  )
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 1, '压缩检查点吞轮要补续写')
+  assert.ok(agent.followups[0].content[0].text.includes('检查点'))
+
+  emit({ id: agent.id }, { type: 'turn/start' })
+  emit(
+    { id: agent.id },
+    { type: 'user/message', data: { source: { kind: 'compact-checkpoint' }, content: [] } },
+  )
+  emit({ id: agent.id }, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'ok' }] } } })
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 1, '有正常输出就不是压缩吞轮')
+})
+
+await test('in-turn：max-tokens 时同轮 steer 续写，单轮上限 3 次', async () => {
+  const { agent, calls } = await setupAutoContinue()
+  const stream = calls.agentListeners.get('agent/assistant-stream')
+  const stopping = calls.agentListeners.get('agent/turn-stopping')
+  assert.equal(typeof stream, 'function')
+  assert.equal(typeof stopping, 'function')
+
+  for (let i = 1; i <= 3; i += 1) {
+    stream({ agent, frame: { type: 'chunk', chunk: { type: 'finish', reason: { kind: 'max-tokens' } } } })
+    stopping({ agent, turn: 7, signal: { aborted: false } })
+    assert.equal(agent.steers.length, i, `第 ${i} 次同轮续写`)
+  }
+  stream({ agent, frame: { type: 'chunk', chunk: { type: 'finish', reason: { kind: 'max-tokens' } } } })
+  stopping({ agent, turn: 7, signal: { aborted: false } })
+  assert.equal(agent.steers.length, 3, '达到单轮上限后放行 turn/end')
+  assert.ok(agent.steers[0].content[0].text.includes('截断'))
+
+  // 非 max-tokens 的 finish 不触发
+  stream({ agent, frame: { type: 'chunk', chunk: { type: 'finish', reason: { kind: 'stop' } } } })
+  stopping({ agent, turn: 8, signal: { aborted: false } })
+  assert.equal(agent.steers.length, 3)
+})
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failed, ${passed} passed`)
   for (const { label } of failures) console.error(`  FAILED: ${label}`)
@@ -555,4 +681,5 @@ if (failures.length > 0) {
 } else {
   console.log(`\n${passed} passed`)
 }
+
 
