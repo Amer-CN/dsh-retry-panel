@@ -393,27 +393,31 @@ test('点选项只改草稿；保存成功提示「已保存，立即生效」',
       'continueDelaySec',
       'maxConsecutive',
       'continueText',
+      'failover',
+      'fallbacks',
       'continueOnMaxTokens',
       'idleWatchdog',
       'idleTimeoutSec',
     ],
-    '保存一次写全部 8 个字段',
+    '保存一次写全部 10 个字段',
   )
   assert.equal(ops[0].value, 'long')
   assert.equal(ops[1].value, true)
   assert.equal(ops[2].value, 5)
   assert.equal(ops[3].value, 5)
   assert.equal(ops[4].value, '继续')
-  assert.equal(ops[5].value, true)
-  assert.equal(ops[6].value, false)
-  assert.equal(ops[7].value, 180)
+  assert.equal(ops[5].value, false)
+  assert.equal(ops[6].value, '')
+  assert.equal(ops[7].value, true)
+  assert.equal(ops[8].value, false)
+  assert.equal(ops[9].value, 180)
   assert.equal(scope.mutateCalls[0].revision, 7, '带上当前快照的 revision')
   assert.ok(textOf(next).includes('已保存，立即生效'))
   assert.equal(saveButton(next).props.disabled, true, '保存成功后按钮回到禁用')
   renderer.unmount()
 })
 
-test('自动继续控件：保存 8 个字段并 clamp 数字', async () => {
+test('自动继续控件：保存 10 个字段并 clamp 数字', async () => {
   const scope = makeScope(READY('normal', 3))
   const { renderer, tree } = setup(scope)
 
@@ -443,6 +447,24 @@ test('自动继续控件：保存 8 个字段并 clamp 数字', async () => {
   assert.equal(by.idleWatchdog, true)
   assert.equal(by.idleTimeoutSec, 600, '卡住秒数上限 600')
   assert.ok(textOf(renderer.render()).includes('已保存，立即生效'))
+  renderer.unmount()
+})
+
+test('备用模型：开关与列表写入，未开启时输入禁用', async () => {
+  const scope = makeScope(READY('normal', 5))
+  const { renderer, tree } = setup(scope)
+
+  assert.equal(inputByLabel(tree, '备用模型列表').props.disabled, true, '未开启 failover 时输入禁用')
+  inputByLabel(tree, '主模型失败时切换备用模型').props.onChange({ target: { checked: true } })
+  let next = renderer.render()
+  assert.equal(inputByLabel(next, '备用模型列表').props.disabled, false, '开启后可编辑')
+  inputByLabel(next, '备用模型列表').props.onChange({ target: { value: 'p2/m2, p3/m3' } })
+  next = renderer.render()
+
+  await saveButton(next).props.onClick()
+  const by = Object.fromEntries(scope.mutateCalls[0].ops.map((op) => [op.path[0], op.value]))
+  assert.equal(by.failover, true)
+  assert.equal(by.fallbacks, 'p2/m2, p3/m3')
   renderer.unmount()
 })
 

@@ -29,12 +29,14 @@ import {
   clampInt,
   contentToText,
   continueDelayMs,
+  countRecentFailures,
   decideTurnAction,
   fillContinueText,
   inject,
   isPermanentFailure,
   name,
   normalizePatience,
+  parseFallbacks,
   readPatience,
   readSettings,
 } from '../lib/index.js'
@@ -89,7 +91,7 @@ function makeFakeSettings(rows, options = {}) {
  * @param {{ settings?: object, serviceAvailable?: boolean, getThrows?: Error }} [options]
  */
 function makeFakeCtx(options = {}) {
-  const { settings, serviceAvailable = true, getThrows, agents } = options
+  const { settings, serviceAvailable = true, getThrows, agents, services } = options
   const calls = {
     inject: [],
     effects: 0,
@@ -115,6 +117,7 @@ function makeFakeCtx(options = {}) {
       if (getThrows) throw getThrows
       if (serviceName === 'settings') return serviceAvailable ? settings : undefined
       if (serviceName === 'agents') return agents
+      if (services && Object.hasOwn(services, serviceName)) return services[serviceName]
       return undefined
     },
     inject(names, callback) {
@@ -495,11 +498,17 @@ await test('buildContinueMessage：user 角色 + text part + user source', () =>
 })
 
 /** 假 agent：只实现自动继续用到的字段。 */
-function makeFakeAgent(id = 'session-1') {
+function makeFakeAgent(id = 'session-1', events = []) {
   return {
     id,
     status: 'idle',
-    session: { header: { origin: 'main' } },
+    session: {
+      header: { origin: 'main' },
+      seq: events.length,
+      eventAt(index) {
+        return events[index]
+      },
+    },
     followups: [],
     cancels: [],
     steers: [],
@@ -529,11 +538,10 @@ function makeFakeAgents(agent) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function setupAutoContinue(overrides = {}) {
-  const agent = makeFakeAgent()
+async function setupAutoContinue(overrides = {}, agent = makeFakeAgent(), services = {}) {
   const agents = makeFakeAgents(agent)
   const { settings } = makeFakeSettings(llmRow({ mock: { retryPolicy: { mode: 'normal', maxRetries: 0 } } }))
-  const { ctx, calls } = makeFakeCtx({ settings, agents })
+  const { ctx, calls } = makeFakeCtx({ settings, agents, services })
   const config = {
     patience: 'normal',
     autoContinue: true,
@@ -695,6 +703,88 @@ await test('apply：llm-deepseek 已有 retryPolicy 时不覆盖', async () => {
   await apply(ctx, { patience: 'normal' })
   assert.equal(calls.mutate.length, 1, '只补 pi-ai，不碰手工配置的 deepseek')
   assert.equal(calls.mutate[0].ns, 'llm-pi-ai')
+})
+
+await test('历史计数：插件重载后仍按连续失败上限收手', async () => {
+  const events = Array.from({ length: 6 }, () => ({
+    type: 'turn/end',
+    data: { reason: { kind: 'error', error: { code: 'SERVER' } } },
+  }))
+  const agent = makeFakeAgent('session-1', events)
+  const { emit } = await setupAutoContinue({ maxConsecutive: 5 }, agent)
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 0, '历史已有 6 次连续失败，超过 5 次上限')
+})
+
+await test('历史计数：最近一次 completed 之后重新计数', async () => {
+  const events = [
+    { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+  ]
+  const agent = makeFakeAgent('session-1', events)
+  const { emit } = await setupAutoContinue({ maxConsecutive: 5 }, agent)
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 1, 'completed 之后应重新允许继续')
+})
+
+await test('parseFallbacks：解析 provider/model、去重并丢弃非法项', () => {
+  assert.deepEqual(parseFallbacks('p1/m1, p2/m2\np1/m1'), [
+    { provider: 'p1', model: 'm1' },
+    { provider: 'p2', model: 'm2' },
+  ])
+  assert.deepEqual(parseFallbacks('p1:m1; p2:m2'), [
+    { provider: 'p1', model: 'm1' },
+    { provider: 'p2', model: 'm2' },
+  ])
+  assert.deepEqual(parseFallbacks('bad, /m, p/'), [])
+  assert.deepEqual(parseFallbacks(''), [])
+})
+
+await test('failover：失败后按顺序切备用模型，成功后重置', async () => {
+  const selections = []
+  const services = {
+    sessionController: {
+      agents: {
+        selectForNextRequest(agent, selected) {
+          selections.push(selected)
+        },
+      },
+    },
+  }
+  const { agent, emit } = await setupAutoContinue(
+    { failover: true, fallbacks: 'p2/m2,p3/m3' },
+    undefined,
+    services,
+  )
+  const errorTurn = { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'RATE_LIMIT' } } } }
+
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.deepEqual(selections[0], { provider: 'p2', model: 'm2' })
+  assert.equal(agent.followups.length, 1)
+
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.deepEqual(selections[1], { provider: 'p3', model: 'm3' })
+
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.deepEqual(selections[2], { provider: 'p2', model: 'm2' }, '成功后从第一个备用模型重新开始')
+})
+
+await test('failover：开关关闭时不切模型', async () => {
+  const selections = []
+  const services = {
+    sessionController: { agents: { selectForNextRequest(agent, selected) { selections.push(selected) } } },
+  }
+  const { agent, emit } = await setupAutoContinue({ failover: false, fallbacks: 'p2/m2' }, undefined, services)
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
+  await sleep(20)
+  assert.equal(selections.length, 0)
+  assert.equal(agent.followups.length, 1, '不换模型也要继续')
 })
 
 if (failures.length > 0) {

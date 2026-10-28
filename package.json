@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-retry",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "DeepSeek Harness (DSH) 插件：断线重试 + 自动继续 + 同轮截断续写 + 压缩吞轮恢复 + 卡住检测",
   "type": "module",
   "main": "lib/index.js",

@@ -76,6 +76,8 @@ backoff:        1s 起、60s 封顶、±20% 抖动
 - **你手动发消息或点停止 → 立刻让位**
 - 只对主智能体生效；子智能体是一次性任务，不自动继续
 - 自己发的「继续」会被识别成回显，不误触发人工接管
+- **跨重启计数**：从持久会话历史倒推连续失败次数，与内存计数取较大值；
+  插件重载 / 宿主重启后上限依然成立，不会靠重启把熔断清零
 
 **永久性错误不继续**：`AUTH` / `INVALID_CREDENTIAL` / `QUOTA` /
 `CONTEXT_WINDOW_EXCEEDED` / `INVALID_REQUEST` / `UNKNOWN_MODEL` 等，
@@ -85,13 +87,24 @@ backoff:        1s 起、60s 封顶、±20% 抖动
 写文件、发消息的中间），自动继续的文本会附加一句「先确认外部状态再继续，
 不要重复执行可能产生副作用的操作」。
 
-### 4. 压缩吞轮恢复（v0.3 新增）
+### 4. 模型故障转移（v0.4 新增）
+
+失败被判定为可继续后，如果开启了故障转移，会先通过
+`sessionController.agents.selectForNextRequest()` 把**下一轮请求**切到备用列表里的
+下一个模型，再发「继续」：
+
+- 备用模型在设置里显式填写（`服务商/模型名`，逗号分隔），不会自动把全模型拖进池子
+- 按顺序尝试；成功一轮后回到第一个备用
+- 列表用完就保持当前模型继续，不会无限换模型
+- 切换只影响本会话的下一轮请求，不改你的全局默认模型
+
+### 5. 压缩吞轮恢复（v0.3 新增）
 
 有些压缩事务会把一整轮吞掉：`turn/start → 压缩检查点 → turn/end(completed)`，
 中间零 assistant 输出、零工具调用。插件识别这个形状后补一条
 「按最近的检查点继续动手」，把被吞掉的活接回来。
 
-### 额外：卡住看门狗（默认关闭）
+### 6. 额外：卡住看门狗（默认关闭）
 
 打开后，如果一轮运行中超过 N 秒（默认 180 秒）没有任何流输出或事件：
 
@@ -109,6 +122,8 @@ backoff:        1s 起、60s 封顶、±20% 抖动
 | 等待秒数 | 5 | 0~600；连续失败按 2 倍递增，封顶 10 分钟 |
 | 最多连续 | 5 | 1~50 次，成功一轮清零 |
 | 继续时发送 | 继续 | 支持 `{code}` `{kind}` `{attempt}` `{tool}` |
+| 主模型失败时切换备用模型 | 关 | 失败后把下一轮切到备用模型 |
+| 备用模型 | 空 | `服务商/模型名`，逗号或换行分隔，按顺序尝试 |
 | 输出被截断时也继续 | 开 | 同轮续写 + 跨轮兜底 |
 | 卡住不动时自动重来 | 关 | 看门狗总开关 |
 | 卡住判定秒数 | 180 | 30~600 |
@@ -184,12 +199,13 @@ dsh plugin --profile desktop add github:Amer-CN/dsh-retry-panel
 - 第 1 层只对「临时性」错误重试；`AUTH`、`QUOTA` 等永久错误不会无限重试
   （「死磕」档本身不限次数，请自行停止）
 - 自动继续是「重开一轮」，不是「续写半个回答」；已提交的工具结果和上下文都保留
-- 没有做模型故障转移（failover）；没有做宿主重启后的冷会话扫描；
-  没有做弹窗 / 数据看板 —— 这些是同类插件的能力，本插件刻意保持「一张卡」
+- 故障转移需要显式填写备用模型，不会自动枚举全部已配置模型；
+  也还没有跨重启的「路由健康/冷却表」和模型级熔断
+- 没有做宿主重启后的冷会话扫描、弹窗/看板、按错误码的自定义触发矩阵
 
 ## 我们参考了谁
 
-v0.3 前系统扫了 GitHub 上 40+ 个 DSH retry / auto-continue / failover / watchdog
+v0.4 前系统扫了 GitHub 上 40+ 个 DSH retry / auto-continue / failover / watchdog
 项目，重点精读了 20+ 个。落地时参考了这些思路（实现独立，未复制代码）：
 
 - [zxmqq1234/dsh-auto-retry](https://github.com/zxmqq1234/dsh-auto-retry) —— 回合级继续、熔断、看门狗、通知与看板
@@ -202,9 +218,11 @@ v0.3 前系统扫了 GitHub 上 40+ 个 DSH retry / auto-continue / failover / w
 - [shu0819-sjy/dsh-auto-continue](https://github.com/shu0819-sjy/dsh-auto-continue) —— 双链熔断、防竞争围栏
 - [Captain-OP2008/dsh-auto-continue](https://github.com/Captain-OP2008/dsh-auto-continue) —— 历史计数、跨重启上限
 - [elanski/dsh-failover-continue](https://github.com/elanski/dsh-failover-continue) —— 自动继续 + 模型 failover、冷会话扫描
+- [cglyvip/dsh-auto-continue](https://github.com/cglyvip/dsh-auto-continue) —— `sessionController.selectForNextRequest` 切换路径
+- [QGG4588/dsh-model-failover](https://github.com/QGG4588/dsh-model-failover) —— provider 池、预判绕行、熔断持久化
 
-明确没做的：模型故障转移、宿主重启后的冷会话扫描、弹窗/看板、按错误码的自定义触发矩阵。
-不是不会做，而是会把「一张卡」变成一套运维面板；需要再加。
+明确没做的：宿主重启后的冷会话扫描、弹窗/看板、按错误码的自定义触发矩阵；
+故障转移也还没有跨重启的路由健康表/模型级熔断，备用模型需要显式配置。
 
 ## 开发
 
@@ -217,7 +235,7 @@ npm test
   `/api/auto-retry/apply` 路由、自动继续 / 同轮续写 / 压缩恢复 / 看门狗状态机
 - `lib/client.js`：浏览器侧。lazy-CJS 模块壳，注册 `settings.section`，渲染设置卡片
 - `cordis.patch.yml`：bundle patch，只插入 `auto-retry` 一行
-- `tests/`：不启动 DSH 的离线测试（服务端 29 项、客户端 10 项）
+- `tests/`：不启动 DSH 的离线测试（服务端 34 项、客户端 11 项）
 
 没有构建步骤；`lib/*.js` 就是发布产物。
 
