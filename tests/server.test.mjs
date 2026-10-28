@@ -740,6 +740,10 @@ await test('parseFallbacks：解析 provider/model、去重并丢弃非法项', 
   ])
   assert.deepEqual(parseFallbacks('bad, /m, p/'), [])
   assert.deepEqual(parseFallbacks(''), [])
+  assert.deepEqual(parseFallbacks('p1/m1#high, p2/m2'), [
+    { provider: 'p1', model: 'm1', reasoningEffort: 'high' },
+    { provider: 'p2', model: 'm2' },
+  ])
 })
 
 await test('failover：失败后按顺序切备用模型，成功后重置', async () => {
