@@ -7,6 +7,8 @@
 > transient `429` / stream failures are retried inside the same turn instead of
 > ending it.
 
+![设置页：断线重试](assets/settings-card.png)
+
 ---
 
 ## 它解决什么问题
