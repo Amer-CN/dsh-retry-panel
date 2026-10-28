@@ -1,0 +1,6 @@
+# dsh-auto-retry bundle patch —— 只插入插件自己这一行。
+# 面板可写字段由 lib/index.js 导出的 Config（.volatile()）声明，
+# 客户端面板在 settings.section 上注册 id `auto-retry` 的导航。
+- insert:
+    - id: auto-retry
+      name: 'dsh-auto-retry'

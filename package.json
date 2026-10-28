@@ -1,0 +1,67 @@
+{
+  "name": "dsh-auto-retry",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness (DSH) 插件：设置里的「断线重试」卡片，429 限流 / 断流时自动重试，四档耐心一键切换",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "retry",
+    "429",
+    "rate-limit"
+  ],
+  "license": "MIT",
+  "author": "Amer-CN",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Amer-CN/dsh-retry-panel.git"
+  },
+  "homepage": "https://github.com/Amer-CN/dsh-retry-panel#readme",
+  "bugs": {
+    "url": "https://github.com/Amer-CN/dsh-retry-panel/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/server.test.mjs && node tests/client.test.mjs"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-settings": ">=0.2.1-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    },
+    "engines": {
+      "dsh": ">=0.2.1-rc.1"
+    }
+  }
+}
