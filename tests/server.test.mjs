@@ -23,11 +23,16 @@ import {
   Config,
   PRESETS,
   apply,
+  buildContinueMessage,
   buildOps,
+  clampInt,
+  contentToText,
+  decideTurnAction,
   inject,
   name,
   normalizePatience,
   readPatience,
+  readSettings,
 } from '../lib/index.js'
 
 const LLM_NS = 'llm-pi-ai'
@@ -80,11 +85,12 @@ function makeFakeSettings(rows, options = {}) {
  * @param {{ settings?: object, serviceAvailable?: boolean, getThrows?: Error }} [options]
  */
 function makeFakeCtx(options = {}) {
-  const { settings, serviceAvailable = true, getThrows } = options
+  const { settings, serviceAvailable = true, getThrows, agents } = options
   const calls = {
     inject: [],
     effects: 0,
     listeners: new Map(),
+    agentListeners: new Map(),
     warnings: [],
     infos: [],
   }
@@ -103,26 +109,44 @@ function makeFakeCtx(options = {}) {
     },
     get(serviceName) {
       if (getThrows) throw getThrows
-      if (serviceName !== 'settings') return undefined
-      return serviceAvailable ? settings : undefined
+      if (serviceName === 'settings') return serviceAvailable ? settings : undefined
+      if (serviceName === 'agents') return agents
+      return undefined
     },
     inject(names, callback) {
       calls.inject.push(names)
-      // 本测试只伪造 settings；webServer/connection 子级不模拟（真机上才有）。
-      if (!names.includes('settings')) return () => {}
-      if (!serviceAvailable || !settings) return () => {}
-      const settingsCtx = {
-        settings,
-        effect(run) {
-          calls.effects += 1
-          return run()
-        },
-        on(event, handler) {
-          calls.listeners.set(event, handler)
-          return () => {}
-        },
+      if (names.includes('settings')) {
+        if (!serviceAvailable || !settings) return () => {}
+        const settingsCtx = {
+          settings,
+          effect(run) {
+            calls.effects += 1
+            return run()
+          },
+          on(event, handler) {
+            calls.listeners.set(event, handler)
+            return () => {}
+          },
+        }
+        callback(settingsCtx)
+        return () => {}
       }
-      callback(settingsCtx)
+      if (names.includes('agents')) {
+        if (!agents) return () => {}
+        const agentsCtx = {
+          agents,
+          effect(run) {
+            calls.effects += 1
+            return run()
+          },
+          on(event, handler) {
+            calls.agentListeners.set(event, handler)
+            return () => {}
+          },
+        }
+        callback(agentsCtx)
+        return () => {}
+      }
       return () => {}
     },
   }
@@ -255,9 +279,10 @@ await test('apply：注册 settings effect/监听，首次安装写入全部 pro
   await apply(ctx, { patience: 'long' })
 
   // 1) 注册了可选 settings 子级，并在子级里注册了两条 effect。
-  assert.equal(calls.inject.length, 2)
+  assert.equal(calls.inject.length, 3)
   assert.deepEqual(calls.inject[0], ['settings'])
   assert.deepEqual(calls.inject[1], ['webServer', 'connection'])
+  assert.deepEqual(calls.inject[2], ['agents'])
   assert.equal(calls.effects, 2, '应有 configure + document-updated 两条 effect')
   assert.ok(calls.listeners.has('settings/document-updated'), '必须监听 document-updated')
 
@@ -317,7 +342,7 @@ await test('apply：document-updated 只补首次安装检查，绝不在事件�
 await test('apply：settings 缺席时静默跳过，不抛错', async () => {
   const { ctx, calls } = makeFakeCtx({ serviceAvailable: false })
   await apply(ctx, { patience: 'long' })
-  assert.deepEqual(calls.inject, [['settings'], ['webServer', 'connection']], '仍尝试注册可选子级')
+  assert.deepEqual(calls.inject, [['settings'], ['webServer', 'connection'], ['agents']], '仍尝试注册可选子级')
   assert.equal(calls.effects, 0, 'settings 缺席时子级不运行')
   assert.equal(calls.warnings.length, 0, '缺席是正常情况，不需要警告')
 })
@@ -363,6 +388,166 @@ await test('apply：config 缺省按 normal 处理', async () => {
   assert.deepEqual(settingsCalls.mutate[0].ops[0].value, PRESETS.normal)
 })
 
+await test('readSettings：默认值、volatile 解包与 clamp', () => {
+  const defaults = readSettings(undefined)
+  assert.equal(defaults.patience, 'normal')
+  assert.equal(defaults.autoContinue, true)
+  assert.equal(defaults.continueDelaySec, 5)
+  assert.equal(defaults.maxConsecutive, 5)
+  assert.equal(defaults.continueText, '继续')
+  assert.equal(defaults.continueOnMaxTokens, true)
+  assert.equal(defaults.idleWatchdog, false)
+  assert.equal(defaults.idleTimeoutSec, 180)
+
+  const custom = readSettings({
+    patience: { get: () => 'always' },
+    autoContinue: { get: () => false },
+    continueDelaySec: { get: () => 9999 },
+    maxConsecutive: { get: () => 0 },
+    continueText: { get: () => '  再试试  ' },
+    continueOnMaxTokens: { get: () => false },
+    idleWatchdog: { get: () => true },
+    idleTimeoutSec: { get: () => 1 },
+  })
+  assert.equal(custom.patience, 'always')
+  assert.equal(custom.autoContinue, false)
+  assert.equal(custom.continueDelaySec, 600, '上限 600 秒')
+  assert.equal(custom.maxConsecutive, 1, '下限 1 次')
+  assert.equal(custom.continueText, '再试试')
+  assert.equal(custom.continueOnMaxTokens, false)
+  assert.equal(custom.idleWatchdog, true)
+  assert.equal(custom.idleTimeoutSec, 30, '下限 30 秒')
+
+  assert.equal(clampInt('abc', 0, 10, 3), 3)
+  assert.equal(clampInt(12.6, 0, 10, 3), 10)
+  assert.equal(clampInt(-5, 0, 10, 3), 0)
+})
+
+await test('decideTurnAction：成功重置 / 失败继续 / 用户停止不继续 / 截断与看门狗', () => {
+  const base = { autoContinue: true, continueOnMaxTokens: true, idleWatchdog: false }
+  assert.equal(decideTurnAction({ kind: 'completed' }, base), 'reset')
+  assert.equal(decideTurnAction({ kind: 'error', error: { code: 'RATE_LIMIT' } }, base), 'continue')
+  assert.equal(decideTurnAction({ kind: 'error' }, { ...base, autoContinue: false }), 'none')
+  assert.equal(decideTurnAction({ kind: 'max-tokens' }, base), 'continue')
+  assert.equal(decideTurnAction({ kind: 'max-tokens' }, { ...base, continueOnMaxTokens: false }), 'none')
+  assert.equal(decideTurnAction({ kind: 'aborted', reason: { kind: 'user' } }, base), 'none')
+  assert.equal(decideTurnAction({ kind: 'aborted', reason: { kind: 'hook' } }, { ...base, idleWatchdog: true }), 'continue')
+  assert.equal(decideTurnAction({ kind: 'aborted', reason: { kind: 'hook' } }, { ...base, idleWatchdog: false }), 'none')
+  assert.equal(decideTurnAction({ kind: 'interrupted' }, base), 'none')
+})
+
+await test('buildContinueMessage：user 角色 + text part + user source', () => {
+  const message = buildContinueMessage('继续')
+  assert.equal(message.role, 'user')
+  assert.equal(message.content[0].type, 'text')
+  assert.equal(message.content[0].text, '继续')
+  assert.equal(message.source.kind, 'user')
+  assert.ok(typeof message.id === 'string' && message.id.length > 0)
+  assert.equal(contentToText([{ type: 'text', text: '继' }, { type: 'text', text: '续' }]), '继续')
+  assert.equal(contentToText('继续'), '继续')
+  assert.equal(contentToText(undefined), '')
+})
+
+/** 假 agent：只实现自动继续用到的字段。 */
+function makeFakeAgent(id = 'session-1') {
+  return {
+    id,
+    status: 'idle',
+    session: { header: { origin: 'main' } },
+    followups: [],
+    cancels: [],
+    followup(message) {
+      this.followups.push(message)
+    },
+    cancel(cause, options) {
+      this.cancels.push({ cause, options })
+    },
+  }
+}
+
+function makeFakeAgents(agent) {
+  return {
+    get(id) {
+      return id === agent.id ? agent : undefined
+    },
+    list() {
+      return [agent]
+    },
+  }
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function setupAutoContinue(overrides = {}) {
+  const agent = makeFakeAgent()
+  const agents = makeFakeAgents(agent)
+  const { settings } = makeFakeSettings(llmRow({ mock: { retryPolicy: { mode: 'normal', maxRetries: 0 } } }))
+  const { ctx, calls } = makeFakeCtx({ settings, agents })
+  const config = {
+    patience: 'normal',
+    autoContinue: true,
+    continueDelaySec: 0,
+    maxConsecutive: 2,
+    continueText: '继续',
+    continueOnMaxTokens: true,
+    idleWatchdog: false,
+    idleTimeoutSec: 180,
+    ...overrides,
+  }
+  await apply(ctx, config)
+  const emit = calls.agentListeners.get('session/event')
+  assert.equal(typeof emit, 'function', '要注册 session/event')
+  return { agent, agents, ctx, calls, emit }
+}
+
+await test('auto-continue：error 回合后发送「继续」，达到 maxConsecutive 停止', async () => {
+  const { agent, emit } = await setupAutoContinue({ maxConsecutive: 2 })
+  const errorTurn = { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'RATE_LIMIT' } } } }
+
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.equal(agent.followups.length, 1)
+  assert.equal(agent.followups[0].content[0].text, '继续')
+
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.equal(agent.followups.length, 2)
+
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.equal(agent.followups.length, 2, '超过上限后不再自动继续')
+})
+
+await test('auto-continue：截断回合按开关继续；用户手动停止后不再继续，成功回合重置', async () => {
+  const { agent, emit } = await setupAutoContinue()
+  const maxTokens = { type: 'turn/end', data: { reason: { kind: 'max-tokens' } } }
+  emit({ id: agent.id }, maxTokens)
+  await sleep(20)
+  assert.equal(agent.followups.length, 1, '截断也要继续')
+
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'RATE_LIMIT' } } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 1, '用户手动停止后不自动继续')
+
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'RATE_LIMIT' } } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 2, '成功回合后恢复自动继续')
+})
+
+await test('auto-continue：人工消息取消待发；自身「继续」回显不取消', async () => {
+  const { agent, emit } = await setupAutoContinue({ continueDelaySec: 1 })
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
+  // 模拟用户在这 200ms 内插话
+  emit(
+    { id: agent.id },
+    { type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: '先别动' }] } },
+  )
+  await sleep(300)
+  assert.equal(agent.followups.length, 0, '人工消息后取消待发')
+})
+
 if (failures.length > 0) {
   console.error(`\n${failures.length} failed, ${passed} passed`)
   for (const { label } of failures) console.error(`  FAILED: ${label}`)
@@ -370,3 +555,4 @@ if (failures.length > 0) {
 } else {
   console.log(`\n${passed} passed`)
 }
+

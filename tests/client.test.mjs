@@ -276,6 +276,13 @@ const saveButton = (tree) => {
   return buttons[0]
 }
 
+/** 按 aria-label 找某个输入控件。 */
+const inputByLabel = (tree, label) => {
+  const inputs = findAll(tree, (element) => element.type === 'input' && element.props['aria-label'] === label)
+  assert.equal(inputs.length, 1, `应有一个输入控件：${label}`)
+  return inputs[0]
+}
+
 /** 注册 + 挂载一次卡片，返回渲染树和卸载用的 renderer。 */
 function setup(scope, options = {}) {
   const renderer = createRenderer()
@@ -377,14 +384,65 @@ test('点选项只改草稿；保存成功提示「已保存，立即生效」',
 
   assert.equal(scope.mutateCalls.length, 1)
   assert.deepEqual(applied, ['long'], '先写 provider retryPolicy，再保存档位')
+  const ops = JSON.parse(JSON.stringify(scope.mutateCalls[0].ops))
   assert.deepEqual(
-    JSON.parse(JSON.stringify(scope.mutateCalls[0].ops)),
-    [{ op: 'set', path: ['patience'], value: 'long' }],
-    '保存只提交一条 patience 写入',
+    ops.map((op) => op.path[0]),
+    [
+      'patience',
+      'autoContinue',
+      'continueDelaySec',
+      'maxConsecutive',
+      'continueText',
+      'continueOnMaxTokens',
+      'idleWatchdog',
+      'idleTimeoutSec',
+    ],
+    '保存一次写全部 8 个字段',
   )
+  assert.equal(ops[0].value, 'long')
+  assert.equal(ops[1].value, true)
+  assert.equal(ops[2].value, 5)
+  assert.equal(ops[3].value, 5)
+  assert.equal(ops[4].value, '继续')
+  assert.equal(ops[5].value, true)
+  assert.equal(ops[6].value, false)
+  assert.equal(ops[7].value, 180)
   assert.equal(scope.mutateCalls[0].revision, 7, '带上当前快照的 revision')
   assert.ok(textOf(next).includes('已保存，立即生效'))
   assert.equal(saveButton(next).props.disabled, true, '保存成功后按钮回到禁用')
+  renderer.unmount()
+})
+
+test('自动继续控件：保存 8 个字段并 clamp 数字', async () => {
+  const scope = makeScope(READY('normal', 3))
+  const { renderer, tree } = setup(scope)
+
+  assert.equal(inputByLabel(tree, '卡住判定秒数').props.disabled, true, '未开卡住检测时秒数禁用')
+
+  inputByLabel(tree, '回合失败后自动发送继续').props.onChange({ target: { checked: false } })
+  let next = renderer.render()
+  inputByLabel(next, '自动继续等待秒数').props.onChange({ target: { value: '9999' } })
+  next = renderer.render()
+  inputByLabel(next, '最多连续自动继续次数').props.onChange({ target: { value: '0' } })
+  next = renderer.render()
+  inputByLabel(next, '输出被截断时也继续').props.onChange({ target: { checked: false } })
+  next = renderer.render()
+  inputByLabel(next, '卡住时自动重来').props.onChange({ target: { checked: true } })
+  next = renderer.render()
+  assert.equal(inputByLabel(next, '卡住判定秒数').props.disabled, false, '勾选后秒数可编辑')
+  inputByLabel(next, '卡住判定秒数').props.onChange({ target: { value: '9999' } })
+  next = renderer.render()
+
+  await saveButton(next).props.onClick()
+  const ops = scope.mutateCalls[0].ops
+  const by = Object.fromEntries(ops.map((op) => [op.path[0], op.value]))
+  assert.equal(by.autoContinue, false)
+  assert.equal(by.continueDelaySec, 600, '等待秒数上限 600')
+  assert.equal(by.maxConsecutive, 1, '连续次数下限 1')
+  assert.equal(by.continueOnMaxTokens, false)
+  assert.equal(by.idleWatchdog, true)
+  assert.equal(by.idleTimeoutSec, 600, '卡住秒数上限 600')
+  assert.ok(textOf(renderer.render()).includes('已保存，立即生效'))
   renderer.unmount()
 })
 

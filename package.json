@@ -1,7 +1,7 @@
 {
   "name": "dsh-auto-retry",
-  "version": "0.1.0",
-  "description": "DeepSeek Harness (DSH) 插件：设置里的「断线重试」卡片，429 限流 / 断流时自动重试，四档耐心一键切换",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness (DSH) 插件：断线重试 + 回合失败自动继续 + 卡住检测，设置里一张卡片搞定",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -22,7 +22,9 @@
     "deepseek-harness",
     "retry",
     "429",
-    "rate-limit"
+    "rate-limit",
+    "auto-continue",
+    "watchdog"
   ],
   "license": "MIT",
   "author": "Amer-CN",
