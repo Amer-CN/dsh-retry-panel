@@ -202,6 +202,27 @@ dsh plugin --profile desktop add github:Amer-CN/dsh-retry-panel
 首次安装时，如果所有 provider 都还没有 `retryPolicy`，Host 会自动应用一次当前
 档位；只要有一个 provider 已有自定义 `retryPolicy`，插件就**不会覆盖**。
 
+## 界面
+
+v0.5.1 按 DSH Design System 的官方几何重做了一遍设置卡，不再是一个个裸控件堆起来：
+
+- 开关：36×20，轨道用 `--dsw-alias-brand-primary` / `--dsw-alias-border-l3`，滑块 16px
+- 输入框：32px 高、8px 圆角、`--dsw-alias-border-l4` 描边、`--dsw-alias-bg-layer-1` 底色
+- 间距 8 / 12 / 16，卡片 / 分组 / 行三级层次，选中态用品牌色描边
+- 全部颜色走 `--dsw-alias-*` 语义 token，自动适配明暗主题
+- 仍然是零依赖、纯内联样式，不往页面注入全局 CSS
+
+生态里确实有专门做界面的项目，值得知道：
+
+- [Physicolor/dsh-design-resources](https://github.com/Physicolor/dsh-design-resources) —— DSH Design System：规范、token、官方图标、26 个组件源码与在线画廊
+- [Physicolor/dsh-ui-harmonizer](https://github.com/Physicolor/dsh-ui-harmonizer) —— 规范化官方 UI、审计已装插件的界面冲突
+- [Physicolor/dsh-widgets](https://github.com/Physicolor/dsh-widgets) —— 可复用 widget 系统
+- [seed-forge/dsh-plugin-ui-components](https://github.com/seed-forge/dsh-plugin-ui-components) —— 面向插件作者的 host-aware React 组件（构建期依赖）
+- [Ssshake1996/dsh-plugin-ui-skill](https://github.com/Ssshake1996/dsh-plugin-ui-skill) —— 插件 UI 契约与静态检查
+- [dshworks/awesome-dsh-themes](https://github.com/dshworks/awesome-dsh-themes) —— 724 个 DSH 主题 / token 皮肤索引
+
+但官方没有强制所有插件使用的组件库：主题项目主要改全局 token，设置卡布局仍然是各插件自己写。所以这里选择「对齐官方几何 + 零依赖」这条路线。
+
 ## 兼容
 
 - DSH `0.2.1-rc.3`（开发和实测版本）
