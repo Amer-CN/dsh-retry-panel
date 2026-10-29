@@ -11,7 +11,7 @@ DeepSeek Harness（DSH）插件：设置里的「断线重试」卡片。
 卡住检测 + 备用模型故障转移 / 推理强度下拉。
 
 - 仓库：https://github.com/Amer-CN/dsh-retry-panel
-- 当前版本：`0.6.0`
+- 当前版本：`0.6.1`
 - License：MIT
 - 无构建步骤：`lib/*.js` 就是发布产物
 
@@ -93,6 +93,14 @@ node .work\lab\mock-server.mjs
 - 不引入构建链；客户端只 `require('react')`，样式内联，不注入全局 CSS。
 - 颜色用 `--dsw-alias-*` token；控件几何对齐官方（Switch 36×20、Input 32/8）。
 - `.work/`、`node_modules/` 不提交。
+
+## DSH STORE 契约
+
+- 运行时依赖只有 `@deepseek-ai/schemastery@3.18.4`，已用根目录 `pnpm-lock.yaml` 固定
+- Bundle Patch 声明 `permissions: { network: true, storage: false }`
+- 网络只用于浏览器同源 `/api/auto-retry/apply` 与 `/api/auto-retry/catalog`
+- 无生命周期脚本、无文件/凭据访问、无外部服务；详见 `README.md` 和 `SECURITY.md`
+- 修改依赖/权限后跑测试、`--dump-config`，再推默认分支等自动复检
 
 ## 已知限制 / 待办
 

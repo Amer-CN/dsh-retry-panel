@@ -226,6 +226,24 @@ v0.5.1 按 DSH Design System 的官方几何重做了一遍设置卡，不再是
 
 但官方没有强制所有插件使用的组件库：主题项目主要改全局 token，设置卡布局仍然是各插件自己写。所以这里选择「对齐官方几何 + 零依赖」这条路线。
 
+## 依赖、权限与失败边界
+
+- **运行时依赖**：仅 `@deepseek-ai/schemastery@3.18.4`（Config schema 用），
+  `pnpm-lock.yaml` 固定版本与完整性；没有 install/prepare/build/postinstall 生命周期脚本，
+  没有原生制品或二进制。
+- **网络**：浏览器端只请求 DSH **同源** 的两个路由
+  `POST /api/auto-retry/apply` 与 `GET /api/auto-retry/catalog`；
+  不访问任何外部域名，也不直接请求模型供应商（模型请求仍由 DSH 自己发出）。
+- **存储 / 凭据**：插件不读写文件、不持久化、不读取 API Key、Cookie 或系统凭据；
+  配置由 DSH settings 管理。
+- **外部服务**：无。
+- **失败边界**：路由失败只返回 503/500 并写 logger 告警，不阻断 DSH 启动；
+  某个 provider 配置非法时只跳过对应写入，其余功能继续。
+- **Bundle Patch**：只 `insert` 自己的 `auto-retry` 条目，不禁用、替换或遮蔽任何
+  `@deepseek-ai/*` 官方组件；权限元数据 `network: true / storage: false`。
+
+安全报告方式见 [SECURITY.md](./SECURITY.md)。
+
 ## 兼容
 
 - DSH `0.2.1-rc.3`（开发和实测版本）

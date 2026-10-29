@@ -823,19 +823,15 @@ await test('冷会话扫描：启动后恢复最近失败会话', async () => {
   }
   const { settings } = makeFakeSettings(llmRow({ mock: { retryPolicy: { mode: 'normal', maxRetries: 0 } } }))
   const { ctx, calls } = makeFakeCtx({ settings, agents, services })
-  process.env.DSH_AUTO_RETRY_BOOT_DELAY_MS = '5'
-  try {
-    await apply(ctx, {
-      patience: 'normal',
-      autoContinue: true,
-      continueDelaySec: 0,
-      maxConsecutive: 5,
-      scanOnBoot: true,
-    })
-    await sleep(80)
-  } finally {
-    delete process.env.DSH_AUTO_RETRY_BOOT_DELAY_MS
-  }
+  await apply(ctx, {
+    patience: 'normal',
+    autoContinue: true,
+    continueDelaySec: 0,
+    maxConsecutive: 5,
+    scanOnBoot: true,
+    bootScanDelayMs: 5,
+  })
+  await sleep(80)
   assert.equal(agent.followups.length, 1, '冷会话应被唤醒并补一条继续')
   assert.ok(calls.infos.some((line) => line.includes('boot scan recovered')))
 })

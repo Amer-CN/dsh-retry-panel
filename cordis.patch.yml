@@ -4,3 +4,8 @@
 - insert:
     - id: auto-retry
       name: 'dsh-auto-retry'
+      # DSH STORE 权限声明：浏览器只请求同源 /api/auto-retry/*。
+      # 不读写文件、不持久化、不使用凭据。
+      permissions:
+        network: true
+        storage: false
