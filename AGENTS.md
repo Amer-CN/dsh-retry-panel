@@ -11,7 +11,7 @@ DeepSeek Harness（DSH）插件：设置里的「断线重试」卡片。
 卡住检测 + 备用模型故障转移 / 推理强度下拉。
 
 - 仓库：https://github.com/Amer-CN/dsh-retry-panel
-- 当前版本：`0.6.1`
+- 当前版本：`0.6.2`
 - License：MIT
 - 无构建步骤：`lib/*.js` 就是发布产物
 
@@ -21,7 +21,7 @@ DeepSeek Harness（DSH）插件：设置里的「断线重试」卡片。
 lib/index.js        Host 侧：Config、retryPolicy 写入、自动继续/看门狗/故障转移/冷扫描
 lib/client.js       浏览器侧：设置卡片（lazy-CJS + 纯内联样式）
 cordis.patch.yml    bundle patch，只插入 auto-retry 一行
-tests/              离线测试（服务端 36 项 + 客户端 11 项）
+tests/              离线测试（服务端 40 项 + 客户端 11 项）
 assets/             README 截图
 .work/              本地测试/调研产物，已 gitignore，不提交
 ```
@@ -30,12 +30,13 @@ assets/             README 截图
 
 - Windows，DSH `0.2.1-rc.5`（桌面端走 nightly 通道，升级频繁；升级后按「DSH 升级复检」跑一遍）
 - Node.js 24（本机 `D:\Program Files\nodejs\node.exe`）
-- 测试依赖 `@deepseek-ai/schemastery`，通过 junction 指向 DSH 自带包：
+- 测试依赖 `@deepseek-ai/schemastery@3.18.5`。不想让 pnpm 联网下载时，可把 junction
+  指到任意 3.18.5 副本（例如 `.work\pkg\node_modules\@deepseek-ai\schemastery`）：
 
 ```powershell
 New-Item -ItemType Junction `
   -Path 'F:\AIXM\dsh-auto-retry\node_modules\@deepseek-ai\schemastery' `
-  -Target 'C:\Users\Admin\.dsh\profiles\node_modules\@deepseek-ai\schemastery'
+  -Target 'F:\AIXM\dsh-auto-retry\.work\pkg\node_modules\@deepseek-ai\schemastery'
 ```
 
 ## 测试
@@ -74,7 +75,7 @@ node .work\lab\mock-server.mjs
 
 桌面端是 nightly 通道，客户端更新频繁。每次 DSH 升级后按这套最小核查（约 10 分钟）：
 
-1. `npm test`：服务端 36 + 客户端 11 必须全绿。
+1. `npm test`：服务端 40 + 客户端 11 必须全绿。
 2. 用上面的 devtest 启动 rc.X，跑 `--dump-config`：确认 `- id: auto-retry` 条目、
    config 与 `permissions` 都在，退出码 0。
 3. 打开启动日志里的 `?token=` 地址 → 设置 → 断线重试：卡片能渲染、改档能保存，
@@ -117,7 +118,7 @@ rc.3 → rc.5 的复检结论：上游改动是思考内容展示、对话标签
 
 ## DSH STORE 契约
 
-- 运行时依赖只有 `@deepseek-ai/schemastery@3.18.4`，已用根目录 `pnpm-lock.yaml` 固定
+- 运行时依赖只有 `@deepseek-ai/schemastery@3.18.5`，已用根目录 `pnpm-lock.yaml` 固定
 - Bundle Patch 声明 `permissions: { network: true, storage: false }`
 - 网络只用于浏览器同源 `/api/auto-retry/apply` 与 `/api/auto-retry/catalog`
 - 无生命周期脚本、无文件/凭据访问、无外部服务；详见 `README.md` 和 `SECURITY.md`
@@ -129,10 +130,14 @@ rc.3 → rc.5 的复检结论：上游改动是思考内容展示、对话标签
 - 路由健康表只在内存，重启清空；没有请求前预判绕行
 - 没有弹窗/看板、按错误码自定义触发矩阵
 - 备用模型目录依赖 `sessionController.modelCatalog()`，宿主不提供时退回手输
-- 下一版可顺手加固（rc.5 审计发现，均为历史遗留、非升级回归）：
-  - 工具结果关联只看 `message.content` 里的 `tool-result` 分片，而宿主把
-    `toolCallId` 放在消息层（`dsh-llm` 的 `createToolResultMessage`），
-    幂等护栏在当前宿主上会退化为「视为已完成」
-  - `session.eventAt()` 已被宿主标记 deprecated，建议迁移到 `snapshotEvents()`
-  - `maybeFirstInstall()` 读 `describe()` 时宿主可能同步 emit
-    `settings/document-updated`，建议先置 `firstInstallDone` 再读，避免重复首装写入
+- 同步读会话事件（`snapshotEvents` / `eventAt`）在宿主 rc.5 均被标 deprecated；
+  等上游给出同步等价替代（投影/订阅）后再迁移，现有逻辑属于宿主允许「暂不迁移」的范围
+
+## 0.6.2 加固项（rc.5 审计发现的历史遗留）
+
+- 工具结果关联同时认 `message.toolCallId`、`message.source.callId`、content 里的
+  `tool-result` 分片与 `data.callId`，幂等护栏不再退化为「视为已完成」
+- 历史失败计数优先用 `snapshotEvents()` 一次取窗口，老宿主回退 `eventAt()`；
+  读取异常一律返回 0，不打断 `turn/end`
+- `maybeFirstInstall()` 增加重入保护，避免 `describe()` 同步广播
+  `settings/document-updated` 时重复首装写入

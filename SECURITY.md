@@ -23,6 +23,6 @@ issue for a vulnerability before it is triaged.
 
 ## Supply chain
 
-`@deepseek-ai/schemastery` is pinned to `3.18.4` and committed with
+`@deepseek-ai/schemastery` is pinned to `3.18.5` and committed with
 `pnpm-lock.yaml`. The repository has no build step; `lib/*.js` is the published
 artifact.

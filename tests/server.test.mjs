@@ -31,6 +31,7 @@ import {
   continueDelayMs,
   countRecentFailures,
   decideTurnAction,
+  extractToolResultId,
   fillContinueText,
   inject,
   isPermanentFailure,
@@ -72,7 +73,8 @@ function makeFakeSettings(rows, options = {}) {
     describe() {
       calls.describe += 1
       if (options.describeError) throw options.describeError
-      return rows
+      options.onDescribe?.(calls.describe)
+      return typeof rows === 'function' ? rows(calls.describe) : rows
     },
     async mutate(ns, ops, expectedRevision) {
       calls.mutate.push({ ns, ops, expectedRevision })
@@ -352,6 +354,23 @@ await test('apply：document-updated 只补首次安装检查，绝不在事件�
   assert.equal(settingsCalls.mutate.length, 1, '事件里不允许再写')
 })
 
+await test('apply：describe 同步广播 document-updated 时不重复首装写入', async () => {
+  // rc.5 的 settings.describe() 会同步 emit settings/document-updated；
+  // 监听器会回头再调 maybeFirstInstall()。没有重入保护时会递归/重复写。
+  let notify
+  const { settings, calls: settingsCalls } = makeFakeSettings(llmRow({ mock: {} }), {
+    onDescribe: () => notify?.(),
+  })
+  const { ctx, calls } = makeFakeCtx({ settings })
+  notify = () => calls.listeners.get('settings/document-updated')?.('llm-pi-ai')
+
+  await apply(ctx, { patience: 'normal' })
+  await flush()
+
+  assert.equal(settingsCalls.mutate.length, 1, '重入不能重复写 retryPolicy')
+  assert.ok(settingsCalls.describe <= 6, `describe 次数应有界，实际 ${settingsCalls.describe}`)
+})
+
 await test('apply：settings 缺席时静默跳过，不抛错', async () => {
   const { ctx, calls } = makeFakeCtx({ serviceAvailable: false })
   await apply(ctx, { patience: 'long' })
@@ -485,6 +504,36 @@ await test('fillContinueText / applyToolGuard：模板占位符与幂等护栏',
   assert.equal(applyToolGuard('继续', undefined), '继续')
 })
 
+await test('extractToolResultId：兼容 message 层与 content 分片的 callId', () => {
+  // 0.2.1-rc.5 的 createToolResultMessage：toolCallId 在 message 层。
+  assert.equal(extractToolResultId({ message: { toolCallId: 'call-1', content: [] } }), 'call-1')
+  // source 上也带一份。
+  assert.equal(extractToolResultId({ message: { source: { kind: 'tool', callId: 'call-2' } } }), 'call-2')
+  // 老消息形态：tool-result content 分片。
+  assert.equal(
+    extractToolResultId({ message: { content: [{ type: 'tool-result', toolCallId: 'call-3' }] } }),
+    'call-3',
+  )
+  // 更早的直传形态。
+  assert.equal(extractToolResultId({ callId: 'call-4' }), 'call-4')
+  // 优先级：content 分片 > message 层 > source > data。
+  assert.equal(
+    extractToolResultId({
+      callId: 'call-4',
+      message: {
+        toolCallId: 'call-1',
+        source: { callId: 'call-2' },
+        content: [{ type: 'tool-result', toolCallId: 'call-3' }],
+      },
+    }),
+    'call-3',
+  )
+  // 都没有时返回 undefined（调用方按「无法关联」保守处理）。
+  assert.equal(extractToolResultId({ message: { content: [{ type: 'text', text: 'ok' }] } }), undefined)
+  assert.equal(extractToolResultId({ message: { toolCallId: '' } }), undefined)
+  assert.equal(extractToolResultId(undefined), undefined)
+})
+
 await test('buildContinueMessage：user 角色 + text part + user source', () => {
   const message = buildContinueMessage('继续')
   assert.equal(message.role, 'user')
@@ -505,6 +554,9 @@ function makeFakeAgent(id = 'session-1', events = []) {
     session: {
       header: { origin: 'main' },
       seq: events.length,
+      snapshotEvents(from = 0, to = events.length) {
+        return events.slice(from, to)
+      },
       eventAt(index) {
         return events[index]
       },
@@ -727,6 +779,57 @@ await test('历史计数：最近一次 completed 之后重新计数', async () 
   emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
   await sleep(20)
   assert.equal(agent.followups.length, 1, 'completed 之后应重新允许继续')
+})
+
+await test('历史计数：优先用 snapshotEvents 一次取窗口', () => {
+  const events = [
+    { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+    { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'TIMEOUT' } } } },
+    { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+    { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+  ]
+  let snapshotCalls = 0
+  const session = {
+    seq: events.length,
+    snapshotEvents(from, to) {
+      snapshotCalls += 1
+      return events.slice(from, to)
+    },
+    eventAt() {
+      throw new Error('有 snapshotEvents 时不应逐条读')
+    },
+  }
+  const continuable = (reason) => reason?.kind === 'error'
+  assert.equal(countRecentFailures(session, continuable), 2, '只数最近一次 completed 之后的两次失败')
+  assert.equal(snapshotCalls, 1, '一次快照读完窗口')
+})
+
+await test('历史计数：老宿主只有 eventAt 时逐条回退，异常输入返回 0', () => {
+  const events = [
+    { type: 'turn/end', data: { reason: { kind: 'completed' } } },
+    { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+    { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+  ]
+  const legacy = { seq: events.length, eventAt: (index) => events[index] }
+  assert.equal(countRecentFailures(legacy, (reason) => reason?.kind === 'error'), 2)
+
+  assert.equal(countRecentFailures(undefined, () => true), 0)
+  assert.equal(countRecentFailures({ seq: 3 }, () => true), 0, '没有任何读法时返回 0')
+  assert.equal(countRecentFailures({ seq: 3, snapshotEvents: () => null }, () => true), 0, '非数组返回 0')
+  assert.equal(
+    countRecentFailures(
+      {
+        seq: 3,
+        snapshotEvents() {
+          throw new Error('read failed')
+        },
+      },
+      () => true,
+    ),
+    0,
+    '读取抛错时返回 0，不能打断 turn/end',
+  )
 })
 
 await test('parseFallbacks：解析 provider/model、去重并丢弃非法项', () => {

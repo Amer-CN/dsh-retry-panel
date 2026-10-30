@@ -228,7 +228,7 @@ v0.5.1 按 DSH Design System 的官方几何重做了一遍设置卡，不再是
 
 ## 依赖、权限与失败边界
 
-- **运行时依赖**：仅 `@deepseek-ai/schemastery@3.18.4`（Config schema 用），
+- **运行时依赖**：仅 `@deepseek-ai/schemastery@3.18.5`（Config schema 用），
   `pnpm-lock.yaml` 固定版本与完整性；没有 install/prepare/build/postinstall 生命周期脚本，
   没有原生制品或二进制。
 - **网络**：浏览器端只请求 DSH **同源** 的两个路由
