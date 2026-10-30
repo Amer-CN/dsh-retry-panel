@@ -28,7 +28,7 @@ assets/             README 截图
 
 ## 环境
 
-- Windows，DSH `0.2.1-rc.3`
+- Windows，DSH `0.2.1-rc.5`（桌面端走 nightly 通道，升级频繁；升级后按「DSH 升级复检」跑一遍）
 - Node.js 24（本机 `D:\Program Files\nodejs\node.exe`）
 - 测试依赖 `@deepseek-ai/schemastery`，通过 junction 指向 DSH 自带包：
 
@@ -70,6 +70,27 @@ node .work\lab\mock-server.mjs
 
 浏览器自动化脚本：`.work\lab\cdp-eval.cjs`（`CDP_PORT`、`DSH_PORT` 环境变量）。
 
+## DSH 升级复检
+
+桌面端是 nightly 通道，客户端更新频繁。每次 DSH 升级后按这套最小核查（约 10 分钟）：
+
+1. `npm test`：服务端 36 + 客户端 11 必须全绿。
+2. 用上面的 devtest 启动 rc.X，跑 `--dump-config`：确认 `- id: auto-retry` 条目、
+   config 与 `permissions` 都在，退出码 0。
+3. 打开启动日志里的 `?token=` 地址 → 设置 → 断线重试：卡片能渲染、改档能保存，
+   保存后 `providers.*.retryPolicy` 写入设置文档。
+4. mock `MOCK_FAIL=2` 发一条消息：应产生 3 个请求（2×429 + 200）、只显示一条回答。
+5. 判据：以上通过即「无需适配」；任何一步失败，先 diff 上游
+   `npm pack @deepseek-ai/dsh@<新版本>` 的 `lib/*.js`，重点看插件触及的契约点：
+   `settings.describe/mutate/configure`、`settings/document-updated`、
+   `slots` + `configForms`（卡片注册）、`agents` 事件与 `steer/followup`、
+   `webServer.register`、`connection.requestRejection`、
+   `sessionController.modelCatalog / .agents.selectForNextRequest`。
+
+rc.3 → rc.5 的复检结论：上游改动是思考内容展示、对话标签提示、MCP 资源能力判断与
+日志流修补；插件触及的全部契约点（涉及 24 个上游包；306 个包做了全量运行时哈希比对）
+无一变化，**无需改代码**（2026-10-30，真机全项通过）。
+
 ## 桌面端安装关系
 
 `C:\Users\Admin\.dsh\profiles\desktop` 里：
@@ -108,3 +129,10 @@ node .work\lab\mock-server.mjs
 - 路由健康表只在内存，重启清空；没有请求前预判绕行
 - 没有弹窗/看板、按错误码自定义触发矩阵
 - 备用模型目录依赖 `sessionController.modelCatalog()`，宿主不提供时退回手输
+- 下一版可顺手加固（rc.5 审计发现，均为历史遗留、非升级回归）：
+  - 工具结果关联只看 `message.content` 里的 `tool-result` 分片，而宿主把
+    `toolCallId` 放在消息层（`dsh-llm` 的 `createToolResultMessage`），
+    幂等护栏在当前宿主上会退化为「视为已完成」
+  - `session.eventAt()` 已被宿主标记 deprecated，建议迁移到 `snapshotEvents()`
+  - `maybeFirstInstall()` 读 `describe()` 时宿主可能同步 emit
+    `settings/document-updated`，建议先置 `firstInstallDone` 再读，避免重复首装写入

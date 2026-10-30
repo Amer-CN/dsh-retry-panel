@@ -246,7 +246,10 @@ v0.5.1 按 DSH Design System 的官方几何重做了一遍设置卡，不再是
 
 ## 兼容
 
-- DSH `0.2.1-rc.3`（开发和实测版本）
+- DSH `0.2.1-rc.5`（2026-10-30 实测；`rc.3 → rc.5` 的上游改动是思考内容展示、
+  对话标签提示、MCP 资源能力判断与日志流修补，本插件触及的设置、事件、路由与
+  模型目录 API 全部未变，无需改代码）
+- `0.2.1-rc.1` 起可用（见 `package.json` 的 `dsh.engines.dsh`）
 - 需要 `settings` / `configEditor` 的 profile（desktop / web）；headless 下静默跳过
 - 插件零外部运行时依赖（除 `@deepseek-ai/schemastery`）
 
