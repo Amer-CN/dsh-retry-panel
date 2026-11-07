@@ -882,6 +882,50 @@ await test('failover：失败后按顺序切备用模型，成功后重置', asy
   assert.deepEqual(selections[2], { provider: 'p2', model: 'm2' }, '成功后从第一个备用模型重新开始')
 })
 
+await test('failover：DSH ≥ 0.2.2 走 agent.model.select（selectForNextRequest 已移除）', async () => {
+  const selected = []
+  const agent = makeFakeAgent()
+  agent.model = {
+    select(selection) {
+      selected.push(selection)
+    },
+  }
+  // 新宿主上 sessionController.agents 已没有 selectForNextRequest
+  const services = { sessionController: { agents: {} } }
+  const { emit } = await setupAutoContinue(
+    { failover: true, fallbacks: 'p2/m2,p3/m3', healthCooldownSec: 0 },
+    agent,
+    services,
+  )
+  const errorTurn = { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'RATE_LIMIT' } } } }
+
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.deepEqual(selected[0], { provider: 'p2', model: 'm2' })
+  assert.equal(agent.followups.length, 1)
+
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.deepEqual(selected[1], { provider: 'p3', model: 'm3' }, '下一个备用模型')
+
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
+  emit({ id: agent.id }, errorTurn)
+  await sleep(20)
+  assert.deepEqual(selected[2], { provider: 'p2', model: 'm2' }, '成功后从第一个备用模型重新开始')
+})
+
+await test('failover：新旧选型入口都不存在时不切模型、不抛错', async () => {
+  const services = { sessionController: { agents: {} } }
+  const { agent, emit } = await setupAutoContinue(
+    { failover: true, fallbacks: 'p2/m2' },
+    undefined,
+    services,
+  )
+  emit({ id: agent.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } })
+  await sleep(20)
+  assert.equal(agent.followups.length, 1, '换不了模型也要继续')
+})
+
 await test('failover：开关关闭时不切模型', async () => {
   const selections = []
   const services = {
@@ -936,6 +980,101 @@ await test('冷会话扫描：启动后恢复最近失败会话', async () => {
   })
   await sleep(80)
   assert.equal(agent.followups.length, 1, '冷会话应被唤醒并补一条继续')
+  assert.ok(calls.infos.some((line) => line.includes('boot scan recovered')))
+})
+
+await test('冷会话扫描：DSH ≥ 0.2.2 用 sessionQuery.readSession（inspect 已移除）', async () => {
+  const agent = makeFakeAgent('cold-2')
+  let resolved = false
+  const agents = {
+    get(id) {
+      return id === 'cold-2' && resolved ? agent : undefined
+    },
+    list() {
+      return []
+    },
+  }
+  const services = {
+    sessionController: {
+      async list() {
+        return { items: [{ sessionId: 'cold-2', updatedAt: Date.now() }] }
+      },
+      // 新宿主上没有 inspect
+      async resolveAgent() {
+        resolved = true
+        return { agent }
+      },
+    },
+    sessionQuery: {
+      async readSession() {
+        return {
+          events: [
+            { type: 'turn/start' },
+            { type: 'turn/end', data: { reason: { kind: 'error', error: { code: 'SERVER' } } } },
+          ],
+        }
+      },
+    },  }
+  const { settings } = makeFakeSettings(llmRow({ mock: { retryPolicy: { mode: 'normal', maxRetries: 0 } } }))
+  const { ctx, calls } = makeFakeCtx({ settings, agents, services })
+  await apply(ctx, {
+    patience: 'normal',
+    autoContinue: true,
+    continueDelaySec: 0,
+    maxConsecutive: 5,
+    scanOnBoot: true,
+    bootScanDelayMs: 5,
+  })
+  await sleep(80)
+  assert.equal(agent.followups.length, 1, '冷会话应被唤醒并补一条继续')
+  assert.ok(calls.infos.some((line) => line.includes('boot scan recovered')))
+})
+
+await test('冷会话扫描：冷读补出的 turn/end(interrupted) 按中断恢复', async () => {
+  const agent = makeFakeAgent('cold-3')
+  let resolved = false
+  const agents = {
+    get(id) {
+      return id === 'cold-3' && resolved ? agent : undefined
+    },
+    list() {
+      return []
+    },
+  }
+  const services = {
+    sessionController: {
+      async list() {
+        return { items: [{ sessionId: 'cold-3', updatedAt: Date.now() }] }
+      },
+      async resolveAgent() {
+        resolved = true
+        return { agent }
+      },
+    },
+    sessionQuery: {
+      async readSession() {
+        return {
+          events: [
+            { type: 'turn/start' },
+            // session-query 的冷读会为中断回合补这条
+            { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+          ],
+        }
+      },
+    },
+  }
+  const { settings } = makeFakeSettings(llmRow({ mock: { retryPolicy: { mode: 'normal', maxRetries: 0 } } }))
+  const { ctx, calls } = makeFakeCtx({ settings, agents, services })
+  await apply(ctx, {
+    patience: 'normal',
+    autoContinue: true,
+    continueDelaySec: 0,
+    maxConsecutive: 5,
+    scanOnBoot: true,
+    bootScanDelayMs: 5,
+  })
+  await sleep(80)
+  assert.equal(agent.followups.length, 1, '中断回合也要继续')
   assert.ok(calls.infos.some((line) => line.includes('boot scan recovered')))
 })
 

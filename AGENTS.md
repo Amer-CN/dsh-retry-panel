@@ -11,7 +11,7 @@ DeepSeek Harness（DSH）插件：设置里的「断线重试」卡片。
 卡住检测 + 备用模型故障转移 / 推理强度下拉。
 
 - 仓库：https://github.com/Amer-CN/dsh-retry-panel
-- 当前版本：`0.6.2`
+- 当前版本：`0.6.3`
 - License：MIT
 - 无构建步骤：`lib/*.js` 就是发布产物
 
@@ -21,14 +21,14 @@ DeepSeek Harness（DSH）插件：设置里的「断线重试」卡片。
 lib/index.js        Host 侧：Config、retryPolicy 写入、自动继续/看门狗/故障转移/冷扫描
 lib/client.js       浏览器侧：设置卡片（lazy-CJS + 纯内联样式）
 cordis.patch.yml    bundle patch，只插入 auto-retry 一行
-tests/              离线测试（服务端 40 项 + 客户端 11 项）
+tests/              离线测试（服务端 44 项 + 客户端 11 项）
 assets/             README 截图
 .work/              本地测试/调研产物，已 gitignore，不提交
 ```
 
 ## 环境
 
-- Windows，DSH `0.2.1-rc.5`（桌面端走 nightly 通道，升级频繁；升级后按「DSH 升级复检」跑一遍）
+- Windows，DSH `0.2.2-rc.1`（桌面端走 nightly 通道，升级频繁；升级后按「DSH 升级复检」跑一遍）
 - Node.js 24（本机 `D:\Program Files\nodejs\node.exe`）
 - 测试依赖 `@deepseek-ai/schemastery@3.18.5`。不想让 pnpm 联网下载时，可把 junction
   指到任意 3.18.5 副本（例如 `.work\pkg\node_modules\@deepseek-ai\schemastery`）：
@@ -75,7 +75,7 @@ node .work\lab\mock-server.mjs
 
 桌面端是 nightly 通道，客户端更新频繁。每次 DSH 升级后按这套最小核查（约 10 分钟）：
 
-1. `npm test`：服务端 40 + 客户端 11 必须全绿。
+1. `npm test`：服务端 44 + 客户端 11 必须全绿。
 2. 用上面的 devtest 启动 rc.X，跑 `--dump-config`：确认 `- id: auto-retry` 条目、
    config 与 `permissions` 都在，退出码 0。
 3. 打开启动日志里的 `?token=` 地址 → 设置 → 断线重试：卡片能渲染、改档能保存，
@@ -86,11 +86,28 @@ node .work\lab\mock-server.mjs
    `settings.describe/mutate/configure`、`settings/document-updated`、
    `slots` + `configForms`（卡片注册）、`agents` 事件与 `steer/followup`、
    `webServer.register`、`connection.requestRejection`、
-   `sessionController.modelCatalog / .agents.selectForNextRequest`。
+   `sessionController.modelCatalog / .list / .resolveAgent`、
+   选型入口（0.2.2 起是 `agent.model.select`）、
+   冷会话事件读取（0.2.2 起是 `sessionQuery.readSession`）。
+   注意：这些被删的 API 都是**静默降级**（守卫处直接 return 或 logger.warn），
+   所以 3、4 步全过也不代表功能齐全——必须额外跑 6、7。
+6. 故障转移：mock1 持续失败 → 日志出现 `auto-retry: failover to <p>/<m>`，
+   session 里出现 `model/selection` 且下一条 `request/header` 换了 provider。
+7. 冷会话恢复：让一个回合以 error 收场后**强杀** devtest，再重启；
+   启动日志应出现 `auto-retry: boot scan recovered` 并自动补「继续」。
 
 rc.3 → rc.5 的复检结论：上游改动是思考内容展示、对话标签提示、MCP 资源能力判断与
 日志流修补；插件触及的全部契约点（涉及 24 个上游包；306 个包做了全量运行时哈希比对）
 无一变化，**无需改代码**（2026-10-30，真机全项通过）。
+
+rc.5 → 0.2.2-rc.1 的复检结论：**需要适配**。上游这次不是静默版本号跳动——cordis
+4.0.5→4.1.0、schemastery 3.19.0、会话选型改为投影、控制器大改；45 个契约点里
+43 个 SAFE、2 个 RISK，而这两个恰好都是**静默降级**（守卫处 return，日志只有一条 warn）：
+`SessionController.inspect()` 删除 → 冷会话开机恢复整段失效；
+`agents.selectForNextRequest()` 删除 → 备用模型故障转移失效。
+已迁移到 `sessionQuery.readSession()` 与 `agent.model.select()`，并保留旧入口回退
+（2026-11-07；真机六项全过，含故障转移与强杀重启后的冷会话恢复）。教训：**卡片能开、
+重试能跑，不代表功能齐全**——每轮复检必须单独验证故障转移与冷扫描（见上面第 6、7 步）。
 
 ## 桌面端安装关系
 
@@ -132,6 +149,18 @@ rc.3 → rc.5 的复检结论：上游改动是思考内容展示、对话标签
 - 备用模型目录依赖 `sessionController.modelCatalog()`，宿主不提供时退回手输
 - 同步读会话事件（`snapshotEvents` / `eventAt`）在宿主 rc.5 均被标 deprecated；
   等上游给出同步等价替代（投影/订阅）后再迁移，现有逻辑属于宿主允许「暂不迁移」的范围
+
+## 0.6.3 适配项（DSH 0.2.2-rc.1）
+
+两处上游 API 删除导致的**静默失效**，均按「新入口优先、旧入口回退」修：
+
+- **故障转移**：`sessionController.agents.selectForNextRequest()` → `agent.model.select()`
+  （0.2.2 把选型改成会话投影 `model/selection`，选型权下放到 Agent 自身）。
+- **冷会话开机恢复**：`sessionController.inspect()` → `sessionQuery.readSession()`；
+  并用 `Symbol.dispose` 之外的方式不依赖租约。冷读会为中断回合补
+  `turn/end{reason.kind:'interrupted'}`，现在与「日志里没有 turn/end」等价处理。
+
+两个入口都保留旧 API 回退，`engines.dsh` 无需提高。测试从 40 增到 44（新增 4 项专测新旧分支）。
 
 ## 0.6.2 加固项（rc.5 审计发现的历史遗留）
 
