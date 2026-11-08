@@ -90,7 +90,8 @@ backoff:        1s 起、60s 封顶、±20% 抖动
 ### 4. 模型故障转移（v0.4 新增，v0.6 改为下拉选择）
 
 失败被判定为可继续后，如果开启了故障转移，会先通过
-`sessionController.agents.selectForNextRequest()` 把**下一轮请求**切到备用列表里的
+`agent.model.select()`（DSH ≥ 0.2.2；旧宿主回退
+`sessionController.agents.selectForNextRequest()`）把**下一轮请求**切到备用列表里的
 下一个模型，再发「继续」：
 
 - 备用模型直接来自你 DSH 里真实的供应商 / 模型目录，下拉选择，不用手输
@@ -110,7 +111,8 @@ backoff:        1s 起、60s 封顶、±20% 抖动
 
 - 通过 `sessionController.list()` 枚举最近 10 分钟内活跃的持久会话
 - 跳过正在运行、子智能体、以及当前已加载的会话
-- 用 `inspect()` 读日志，找最后一个 `turn/end` 或未收尾的 `turn/start`
+- 用 `sessionQuery.readSession()` 读日志（DSH ≥ 0.2.2；旧宿主回退
+  `sessionController.inspect()`），找最后一个 `turn/end` 或未收尾的 `turn/start`
 - 对可恢复的失败（或孤儿回合）调用 `resolveAgent()` 唤醒会话，再补一次继续
 - 单次启动最多检查 5 个会话；已被后续消息覆盖的会话不会动
 
@@ -214,6 +216,8 @@ v0.5.1 按 DSH Design System 的官方几何重做了一遍设置卡，不再是
 - 间距 8 / 12 / 16，卡片 / 分组 / 行三级层次，选中态用品牌色描边
 - 全部颜色走 `--dsw-alias-*` 语义 token，自动适配明暗主题
 - 仍然是零依赖、纯内联样式，不往页面注入全局 CSS
+- v0.6.4 起带两处图标：插件面板读 `package.json` 的 `icon`，设置导航注册
+  `settings.section.icon`；两处图形不同，但都是「循环重试箭头」这一家族
 
 生态里确实有专门做界面的项目，值得知道：
 
@@ -246,10 +250,12 @@ v0.5.1 按 DSH Design System 的官方几何重做了一遍设置卡，不再是
 
 ## 兼容
 
-- DSH `0.2.1-rc.5`（2026-10-30 实测；`rc.3 → rc.5` 的上游改动是思考内容展示、
-  对话标签提示、MCP 资源能力判断与日志流修补，本插件触及的设置、事件、路由与
-  模型目录 API 全部未变，无需改代码）
-- `0.2.1-rc.1` 起可用（见 `package.json` 的 `dsh.engines.dsh`）
+- DSH `0.2.2-rc.1`（2026-11-07 实测；选型改 `agent.model.select()`、冷读改
+  `sessionQuery.readSession()`，旧入口保留回退，见 AGENTS 的 0.6.3）
+- DSH `0.2.1-rc.5`（2026-10-30 实测；设置、事件、路由与模型目录 API 全部未变，
+  无需改代码）
+- `0.2.1-rc.1` 起可用（见 `package.json` 的 `dsh.engines.dsh`）；设置导航图标
+  需要 DSH `0.2.2+`，更老的宿主只显示默认齿轮
 - 需要 `settings` / `configEditor` 的 profile（desktop / web）；headless 下静默跳过
 - 插件零外部运行时依赖（除 `@deepseek-ai/schemastery`）
 
@@ -291,11 +297,13 @@ npm install
 npm test
 ```
 
-- `lib/index.js`：Host 侧。Config（8 个 volatile 字段）、首次安装写入、
+- `lib/index.js`：Host 侧。Config（13 个 volatile 字段，其中 11 个在卡片上可编辑）、首次安装写入、
   `/api/auto-retry/apply` 路由、自动继续 / 同轮续写 / 压缩恢复 / 看门狗状态机
-- `lib/client.js`：浏览器侧。lazy-CJS 模块壳，注册 `settings.section`，渲染设置卡片
+- `lib/client.js`：浏览器侧。lazy-CJS 模块壳，注册 `settings.section` 与
+  `settings.section.icon`，渲染设置卡片和导航图标
+- `icon.svg`：插件面板图标（包清单 `icon` 字段）
 - `cordis.patch.yml`：bundle patch，只插入 `auto-retry` 一行
-- `tests/`：不启动 DSH 的离线测试（服务端 36 项、客户端 11 项）
+- `tests/`：不启动 DSH 的离线测试（服务端 44 项、客户端 13 项）
 
 没有构建步骤；`lib/*.js` 就是发布产物。
 

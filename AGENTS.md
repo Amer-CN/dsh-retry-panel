@@ -11,7 +11,7 @@ DeepSeek Harness（DSH）插件：设置里的「断线重试」卡片。
 卡住检测 + 备用模型故障转移 / 推理强度下拉。
 
 - 仓库：https://github.com/Amer-CN/dsh-retry-panel
-- 当前版本：`0.6.3`
+- 当前版本：`0.6.4`
 - License：MIT
 - 无构建步骤：`lib/*.js` 就是发布产物
 
@@ -19,9 +19,10 @@ DeepSeek Harness（DSH）插件：设置里的「断线重试」卡片。
 
 ```text
 lib/index.js        Host 侧：Config、retryPolicy 写入、自动继续/看门狗/故障转移/冷扫描
-lib/client.js       浏览器侧：设置卡片（lazy-CJS + 纯内联样式）
+lib/client.js       浏览器侧：设置卡片 + 设置导航图标（lazy-CJS + 纯内联样式）
+icon.svg            插件面板图标（package.json `icon` 字段）
 cordis.patch.yml    bundle patch，只插入 auto-retry 一行
-tests/              离线测试（服务端 44 项 + 客户端 11 项）
+tests/              离线测试（服务端 44 项 + 客户端 13 项）
 assets/             README 截图
 .work/              本地测试/调研产物，已 gitignore，不提交
 ```
@@ -75,16 +76,18 @@ node .work\lab\mock-server.mjs
 
 桌面端是 nightly 通道，客户端更新频繁。每次 DSH 升级后按这套最小核查（约 10 分钟）：
 
-1. `npm test`：服务端 44 + 客户端 11 必须全绿。
+1. `npm test`：服务端 44 + 客户端 13 必须全绿。
 2. 用上面的 devtest 启动 rc.X，跑 `--dump-config`：确认 `- id: auto-retry` 条目、
    config 与 `permissions` 都在，退出码 0。
 3. 打开启动日志里的 `?token=` 地址 → 设置 → 断线重试：卡片能渲染、改档能保存，
-   保存后 `providers.*.retryPolicy` 写入设置文档。
+   保存后 `providers.*.retryPolicy` 写入设置文档；插件面板 `dsh-auto-retry` 行和
+   设置导航「断线重试」行都应显示自定义图标（不是默认齿轮）。
 4. mock `MOCK_FAIL=2` 发一条消息：应产生 3 个请求（2×429 + 200）、只显示一条回答。
 5. 判据：以上通过即「无需适配」；任何一步失败，先 diff 上游
    `npm pack @deepseek-ai/dsh@<新版本>` 的 `lib/*.js`，重点看插件触及的契约点：
    `settings.describe/mutate/configure`、`settings/document-updated`、
-   `slots` + `configForms`（卡片注册）、`agents` 事件与 `steer/followup`、
+   `slots` + `configForms`（卡片/导航图标注册）、`readPluginMeta()` + `iconOf()`
+   （插件面板图标）、`agents` 事件与 `steer/followup`、
    `webServer.register`、`connection.requestRejection`、
    `sessionController.modelCatalog / .list / .resolveAgent`、
    选型入口（0.2.2 起是 `agent.model.select`）、
@@ -149,6 +152,22 @@ rc.5 → 0.2.2-rc.1 的复检结论：**需要适配**。上游这次不是静�
 - 备用模型目录依赖 `sessionController.modelCatalog()`，宿主不提供时退回手输
 - 同步读会话事件（`snapshotEvents` / `eventAt`）在宿主 rc.5 均被标 deprecated；
   等上游给出同步等价替代（投影/订阅）后再迁移，现有逻辑属于宿主允许「暂不迁移」的范围
+
+## 0.6.4 图标（插件面板 + 设置导航）
+
+DSH 0.2.2 起插件元数据和设置导航都能带自定义图标，两处走的是**两套不同机制**：
+
+- **插件面板**：`package.json` 根字段 `"icon": "./icon.svg"`。宿主
+  `dsh-app-boot` 的 `readPluginMeta()` / `iconOf()` 读包清单的 `icon`，也接受
+  `exports` 里的 `<specifier>/icon` 回退；只收 SVG/PNG/JPEG/WebP、≤256 KiB，
+  且必须留在包目录内。`files` 里也要带上 `icon.svg`，否则 npm 发布后图标丢失。
+- **设置导航**：`lib/client.js` 注册 `settings.section.icon` 座位（list + inline），
+  `id` 必须与 `settings.section` 的 `id` 一致（本插件是 `auto-retry`），
+  宿主按 id 对齐后传给组件 `{ size, active }`。DSH 0.2.1 没有这个座位时，
+  按 usage-stats 的兼容写法 `ctx.slots.inject()` 的回调不会执行，旧宿主仍只显示默认齿轮。
+- 两处图形刻意不同：插件面板是深色圆角底 + 蓝色循环箭头 + 绿色闪电（`icon.svg`）；
+  设置导航是 24 视框、`currentColor`、2px 描边的纯线性循环箭头，与官方导航同视觉重量。
+- 测试 44 + 13（新增导航图标和包元数据 2 项）。
 
 ## 0.6.3 适配项（DSH 0.2.2-rc.1）
 

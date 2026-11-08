@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="自动重试">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#16202b"/>
+  <g transform="translate(8 8) scale(2)" fill="none" stroke="#4da6ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+    <path d="M21 3v5h-5"/>
+  </g>
+  <path d="M34.6 24.2 28.1 35.4h6.6l-3.4 9.4 8.6-12.9h-6.6l3.6-7.7z" fill="#50d682"/>
+</svg>

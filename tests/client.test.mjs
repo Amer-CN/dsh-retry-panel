@@ -289,8 +289,10 @@ function setup(scope, options = {}) {
   const client = loadClient(renderer.react)
   const { ctx, calls } = makeCtx(scope)
   client.apply(ctx)
-  assert.equal(calls.registers.length, 1, '应注册一个设置区块')
-  const { spec, component } = calls.registers[0]
+  assert.equal(calls.registers.length, 2, '应注册设置区块与导航图标')
+  const section = calls.registers.find((entry) => entry.spec.name === 'settings.section')
+  assert.ok(section !== undefined, '应注册 settings.section')
+  const { spec, component } = section
   const applied = []
   const applyPreset =
     options.applyPreset ??
@@ -324,18 +326,67 @@ test('导出与注册：apply / inject 齐全，卡片挂到 settings.section', 
   assert.equal(calls.whileServed.length, 1)
   assert.deepEqual(JSON.parse(JSON.stringify(calls.whileServed)), [['auto-retry']])
   assert.ok(calls.slotInjects.includes('settings.section'))
-  assert.equal(calls.registers.length, 1)
+  assert.ok(calls.slotInjects.includes('settings.section.icon'))
+  assert.equal(calls.registers.length, 2)
 
-  const { spec, component } = calls.registers[0]
+  const section = calls.registers.find((entry) => entry.spec.name === 'settings.section')
+  assert.ok(section !== undefined, '应注册 settings.section')
+  const { spec, component } = section
   assert.equal(spec.name, 'settings.section')
   assert.equal(spec.id, 'auto-retry')
   assert.equal(spec.label, '断线重试')
   assert.equal(spec.order, 78)
   assert.equal(typeof component, 'function', '注册的应是组件函数')
 
+  const icon = calls.registers.find((entry) => entry.spec.name === 'settings.section.icon')
+  assert.ok(icon !== undefined, '应注册 settings.section.icon')
+  assert.equal(icon.spec.id, 'auto-retry', '导航图标 id 必须与设置卡对齐')
+  assert.equal(icon.spec.order, 78)
+  assert.equal(icon.spec.label, undefined, '导航图标不投影 label')
+  assert.equal(typeof icon.component, 'function')
+
   const injected = spec.inject()
   assert.equal(injected.scope, scope, '组件通过 inject 拿到 scope')
   assert.equal(injected.asSection, true, '卡片是 section')
+})
+
+test('导航图标：SVG 跟随宿主尺寸与字色，缺省 16px', () => {
+  const client = loadClient(createRenderer().react)
+  const { ctx, calls } = makeCtx(makeScope(READY('normal', 1)))
+  client.apply(ctx)
+
+  const icon = calls.registers.find((entry) => entry.spec.name === 'settings.section.icon')
+  assert.ok(icon !== undefined)
+
+  const renderer = createRenderer()
+  const tree = renderer.mount(icon.component, { size: 16, active: true })
+  assert.equal(tree.type, 'svg')
+  assert.equal(tree.props.viewBox, '0 0 24 24')
+  assert.equal(tree.props.width, 16)
+  assert.equal(tree.props.height, 16)
+  assert.equal(tree.props.fill, 'none')
+  assert.equal(tree.props.stroke, 'currentColor', '跟随导航字色')
+  assert.equal(tree.props.strokeWidth, 2)
+  assert.equal(tree.props['aria-hidden'], 'true')
+
+  const paths = findAll(tree, (element) => element.type === 'path')
+  assert.equal(paths.length, 2, '一个圆弧 + 一个箭头')
+  assert.ok(paths.every((path) => typeof path.props.d === 'string' && path.props.d.length > 0))
+
+  const fallback = renderer.mount(icon.component, {})
+  assert.equal(fallback.props.width, 16, '缺省按 16px 渲染')
+})
+
+test('插件面板图标：package.json 声明 icon.svg 且满足宿主解析条件', () => {
+  const pkg = JSON.parse(readFileSync(join(HERE, '..', 'package.json'), 'utf8'))
+  assert.equal(pkg.icon, './icon.svg', '宿主从包清单的 icon 字段解析')
+  assert.equal(pkg.exports['./icon'], './icon.svg', '保留 <specifier>/icon 回退')
+  assert.ok(pkg.files.includes('icon.svg'), '发布产物体要带图标')
+
+  const svg = readFileSync(join(HERE, '..', 'icon.svg'), 'utf8')
+  assert.ok(Buffer.byteLength(svg) <= 256 * 1024, '宿主限制 256 KiB')
+  assert.match(svg, /^<svg[\s>]/)
+  assert.match(svg, /viewBox="0 0 64 64"/)
 })
 
 test('卡片文案：标题、一行说明、四档顺序与底部小字', () => {
