@@ -29,7 +29,7 @@ assets/             README 截图
 
 ## 环境
 
-- Windows，DSH `0.2.2-rc.1`（桌面端走 nightly 通道，升级频繁；升级后按「DSH 升级复检」跑一遍）
+- Windows，DSH `0.2.2-rc.3`（桌面端走 nightly 通道，升级频繁；升级后按「DSH 升级复检」跑一遍）
 - Node.js 24（本机 `D:\Program Files\nodejs\node.exe`）
 - 测试依赖 `@deepseek-ai/schemastery@3.18.5`。不想让 pnpm 联网下载时，可把 junction
   指到任意 3.18.5 副本（例如 `.work\pkg\node_modules\@deepseek-ai\schemastery`）：
@@ -152,6 +152,25 @@ rc.5 → 0.2.2-rc.1 的复检结论：**需要适配**。上游这次不是静�
 - 备用模型目录依赖 `sessionController.modelCatalog()`，宿主不提供时退回手输
 - 同步读会话事件（`snapshotEvents` / `eventAt`）在宿主 rc.5 均被标 deprecated；
   等上游给出同步等价替代（投影/订阅）后再迁移，现有逻辑属于宿主允许「暂不迁移」的范围
+
+## DSH 0.2.2-rc.1 → 0.2.2-rc.3 复检（2026-11-14）
+
+目标版本 `0.2.2-rc.3`（安装包实测）。本次只有 `upgrade-guide/v0.2.2-rc.1/`
+一节；逐项核对后，与本插件相关的升级项为 0（`Session.append` 重载与
+subagent 中断默认值两项也确认本插件未使用），账号、Forge、CUA、终端、
+Web 搜索、窗口拖拽等其余项均不涉及本插件。结论：**无需改代码**。
+
+复检通过项：
+
+- `npm test`：服务端 44 + 客户端 13。
+- `--dump-config` 退出码 0，`auto-retry` 条目与 `permissions` 正常。
+- 真机：设置卡渲染/保存；插件面板与设置导航图标正常。
+- mock `MOCK_FAIL=2`：2×429 + 200，最终只显示一条回答。
+- 故障转移：mock1 持续 429 → 切到 mock2，mock2 200。
+- 冷会话恢复：error 回合后强杀 devtest；重启后 raw session 出现新的「继续」
+  回合（turn 5 起），随后按 2s/4s/8s/16s 指数退避自动继续。
+- 未复测：看门狗取消与 `agent/turn-stopping` 同轮截断续写；本轮升级指南
+  未触及这些契约，后续发布兼容版本时可补测。
 
 ## 0.6.4 图标（插件面板 + 设置导航）
 
